@@ -1,240 +1,152 @@
 import React, { useState } from 'react';
-import { Transaksi, Kategori } from '../types';
-import { formatCurrency, formatLongDateIndo, formatTimeStr } from '../utils/dateHelper';
+import { Transaction, Envelope } from '../types';
+import { formatCurrency, formatLongDateIndo } from '../utils/dateHelper';
+import { canRollbackTransaction } from '../utils/budgetLogic';
 import { IconHelper } from './IconHelper';
-import { Search, Filter, ArrowUpRight, ArrowDownLeft, Calendar, FileText, Trash2, Clock, Eye } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { History, Search, Trash2, Calendar, Clock, AlertCircle } from 'lucide-react';
 
 interface HistoryViewProps {
-  transaksiList: Transaksi[];
-  kategoriList: Kategori[];
-  onSelectTransaction: (tx: Transaksi) => void;
-  onDeleteTransaction?: (id: string) => void;
+  transactions: Transaction[];
+  envelopes: Envelope[];
+  onDeleteTransaction: (transactionId: string) => Promise<void>;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
-  transaksiList,
-  kategoriList,
-  onSelectTransaction,
+  transactions,
+  envelopes,
   onDeleteTransaction
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState<'semua' | 'masuk' | 'keluar'>('semua');
-  const [filterCategory, setFilterCategory] = useState<string>('semua');
+  const [selectedEnvFilter, setSelectedEnvFilter] = useState('semua');
 
-  // Sorted from newest to oldest
-  const sortedTransactions = [...transaksiList].sort((a, b) => {
-    return new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime();
-  });
+  const now = new Date();
 
   // Filter transactions
-  const filteredTransactions = sortedTransactions.filter(tx => {
-    const matchesSearch = 
-      (tx.catatan?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-      tx.kategori.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredTransactions = transactions.filter(tx => {
+    const env = envelopes.find(e => (e.$id || e.id) === tx.envelope_id);
+    const matchesSearch =
+      (tx.note || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (env?.name || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchesType = 
-      filterType === 'semua' ? true : tx.jenis === filterType;
+    const matchesEnv =
+      selectedEnvFilter === 'semua' ? true : tx.envelope_id === selectedEnvFilter;
 
-    const matchesCategory = 
-      filterCategory === 'semua' ? true : tx.kategori === filterCategory;
-
-    return matchesSearch && matchesType && matchesCategory;
+    return matchesSearch && matchesEnv;
   });
 
-  // Group transactions by date
-  const groupTransactionsByDate = (txs: Transaksi[]) => {
-    const groups: { [dateStr: string]: Transaksi[] } = {};
-    txs.forEach(tx => {
-      const datePart = tx.tanggal.split('T')[0];
-      if (!groups[datePart]) {
-        groups[datePart] = [];
-      }
-      groups[datePart].push(tx);
-    });
-    return groups;
-  };
-
-  const groupedTx = groupTransactionsByDate(filteredTransactions);
-  const groupedKeys = Object.keys(groupedTx).sort((a, b) => b.localeCompare(a));
-
   return (
-    <div className="space-y-4 pb-20">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Riwayat Aktivitas</h1>
-        <p className="text-xs text-slate-500 mt-0.5">Pantau seluruh aliran keluar-masuk dana per amplop</p>
+    <div className="space-y-4 pb-20 pt-2 px-4 max-w-md mx-auto">
+      {/* Header Banner */}
+      <div className="bg-gradient-to-br from-slate-800 to-slate-900 text-white p-5 rounded-2xl shadow-lg space-y-2 relative overflow-hidden">
+        <div className="flex items-center justify-between">
+          <span className="text-xs uppercase tracking-wider text-amber-400 font-semibold flex items-center gap-1.5">
+            <History size={16} /> Riwayat Pengeluaran
+          </span>
+          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">
+            Rollback &lt; 24j
+          </span>
+        </div>
+        <h2 className="text-2xl font-bold tracking-tight">Riwayat Transaksi</h2>
+        <p className="text-xs text-slate-300">
+          Seluruh aktivitas transaksi tercatat murni dari database. Transaksi &lt; 24 jam dapat dibatalkan untuk mengembalikan saldo.
+        </p>
       </div>
 
-      {/* Filter and Search Bar Card */}
-      <div className="bg-white border border-slate-100 rounded-2xl p-3 shadow-sm space-y-3">
-        {/* Search */}
-        <div className="relative flex items-center">
-          <Search size={16} className="absolute left-3.5 text-slate-400" />
+      {/* Filter and Search Card */}
+      <div className="bg-white rounded-2xl p-3 shadow-sm border border-slate-100 space-y-2">
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
-            placeholder="Cari catatan atau nama kategori..."
+            placeholder="Cari catatan atau nama amplop..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-50 focus:bg-white border border-slate-100 focus:border-indigo-500 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-800 font-medium outline-none transition-all"
+            onChange={e => setSearchTerm(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-100 rounded-xl pl-9 pr-3 py-2 text-xs outline-none focus:ring-2 focus:ring-amber-500"
           />
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-col sm:flex-row gap-2">
-          {/* Filter Type Tabs */}
-          <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-full sm:w-auto">
-            {(['semua', 'masuk', 'keluar'] as const).map((type) => (
-              <button
-                key={type}
-                onClick={() => setFilterType(type)}
-                className={`flex-1 sm:flex-initial text-[10px] font-bold px-3 py-1.5 rounded-lg capitalize transition-all cursor-pointer ${
-                  filterType === type
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                {type}
-              </button>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-slate-500 text-[11px] font-medium">Filter Amplop:</span>
+          <select
+            value={selectedEnvFilter}
+            onChange={e => setSelectedEnvFilter(e.target.value)}
+            className="flex-1 bg-slate-50 border border-slate-100 rounded-xl px-2 py-1.5 text-xs text-slate-700 outline-none font-medium"
+          >
+            <option value="semua">Semua Amplop</option>
+            {envelopes.map(env => (
+              <option key={env.$id || env.id} value={env.$id || env.id}>
+                {env.name}
+              </option>
             ))}
-          </div>
-
-          {/* Filter Category Select */}
-          <div className="relative flex-1">
-            <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-100 rounded-xl px-3 py-1.5 text-[10px] font-bold text-slate-600 outline-none cursor-pointer"
-            >
-              <option value="semua">Semua Kategori</option>
-              {kategoriList.map(cat => (
-                <option key={cat.id} value={cat.nama}>
-                  {cat.nama}
-                </option>
-              ))}
-            </select>
-          </div>
+          </select>
         </div>
       </div>
 
-      {/* History Timeline */}
+      {/* Transactions List */}
       {filteredTransactions.length === 0 ? (
-        <div className="text-center py-12 px-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
-          <p className="text-sm text-slate-500">Tidak ada transaksi yang cocok.</p>
-          <button
-            onClick={() => { setSearchTerm(''); setFilterType('semua'); setFilterCategory('semua'); }}
-            className="mt-2 text-xs font-bold text-indigo-600 hover:text-indigo-700 underline cursor-pointer"
-          >
-            Reset Filter Pencarian
-          </button>
+        <div className="bg-white p-8 rounded-2xl text-center border border-slate-100 space-y-2">
+          <div className="w-10 h-10 rounded-full bg-amber-50 text-amber-600 mx-auto flex items-center justify-center">
+            <History size={20} />
+          </div>
+          <p className="text-xs text-slate-500 font-medium">Tidak ada transaksi ditemukan di database.</p>
         </div>
       ) : (
-        <div className="space-y-6 relative pl-3">
-          {/* Vertical timeline backbone line */}
-          <div className="absolute left-6 top-4 bottom-4 w-0.5 bg-slate-100 border-l border-dashed border-slate-300 pointer-events-none"></div>
+        <div className="space-y-2">
+          {filteredTransactions.map(tx => {
+            const env = envelopes.find(e => (e.$id || e.id) === tx.envelope_id);
+            const eligibleRollback = canRollbackTransaction(tx.timestamp, now);
 
-          {groupedKeys.map((dateStr) => {
-            const dayTransactions = groupedTx[dateStr];
             return (
-              <div key={dateStr} className="space-y-3 relative">
-                {/* Date header with calendar badge */}
-                <div className="flex items-center space-x-2 -ml-2 sticky top-0 bg-slate-50/90 backdrop-blur-xs py-1 z-10">
-                  <div className="w-6 h-6 rounded-full bg-slate-200 border border-slate-300 flex items-center justify-center text-slate-600">
-                    <Calendar size={12} />
+              <div
+                key={tx.$id || tx.id}
+                className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:shadow-md transition-all flex items-center justify-between"
+              >
+                <div className="flex items-center space-x-3">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold flex-shrink-0"
+                    style={{ backgroundColor: env?.color || '#94a3b8' }}
+                  >
+                    <IconHelper name={env?.icon || 'Wallet'} size={20} />
                   </div>
-                  <h4 className="text-[11px] font-extrabold text-slate-500 font-mono tracking-wider uppercase">
-                    {formatLongDateIndo(dateStr)}
-                  </h4>
+                  <div>
+                    <div className="font-bold text-slate-800 text-sm">
+                      {env?.name || 'Amplop'}
+                    </div>
+                    {tx.note && <div className="text-xs text-slate-600">{tx.note}</div>}
+                    <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
+                      <Clock size={10} />
+                      <span>{formatLongDateIndo(tx.timestamp)}</span>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Day's transactions list */}
-                <div className="space-y-2.5 pl-5">
-                  {dayTransactions.map((tx) => {
-                    const isMasuk = tx.jenis === 'masuk';
-                    const categoryInfo = kategoriList.find(c => c.nama === tx.kategori);
-                    const accentColor = categoryInfo?.warna || (isMasuk ? '#10b981' : '#ef4444');
+                <div className="text-right flex items-center gap-3">
+                  <div>
+                    <div className="font-extrabold text-red-600 text-base">
+                      -{formatCurrency(tx.amount)}
+                    </div>
+                    {eligibleRollback ? (
+                      <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium">
+                        Rollback (&lt;24j)
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400">Terkunci (&gt;24j)</span>
+                    )}
+                  </div>
 
-                    return (
-                      <motion.div
-                        key={tx.id}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        onClick={() => onSelectTransaction(tx)}
-                        className="bg-white border border-slate-100 rounded-xl p-3.5 shadow-xs hover:shadow-md hover:border-slate-200 hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-between cursor-pointer group"
-                      >
-                        <div className="flex items-center space-x-3.5">
-                          {/* Left icon circle indicating transaction flow */}
-                          <div 
-                            className="w-9 h-9 rounded-full flex items-center justify-center relative shadow-inner"
-                            style={{ backgroundColor: `${accentColor}15` }}
-                          >
-                            <IconHelper name={categoryInfo?.icon || 'Coins'} style={{ color: accentColor }} size={16} />
-                            
-                            {/* Small badges for top up vs expense */}
-                            <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-white ${
-                              isMasuk ? 'bg-emerald-500' : 'bg-rose-500'
-                            }`}>
-                              {isMasuk ? <ArrowDownLeft size={10} /> : <ArrowUpRight size={10} />}
-                            </div>
-                          </div>
-
-                          <div className="space-y-0.5">
-                            <span 
-                              className="inline-block text-[9px] font-bold px-2 py-0.5 rounded-full"
-                              style={{ color: accentColor, backgroundColor: `${accentColor}15` }}
-                            >
-                              {tx.kategori}
-                            </span>
-                            <h5 className="text-xs font-bold text-slate-800 line-clamp-1 group-hover:text-blue-600 transition-colors">
-                              {tx.catatan || `Transaksi ${isMasuk ? 'Top Up' : 'Keluar'}`}
-                            </h5>
-                            <div className="flex items-center space-x-1 text-[10px] text-slate-400 font-mono">
-                              <Clock size={10} />
-                              <span>{formatTimeStr(tx.tanggal)} WIB</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Right side displays nominal and action buttons */}
-                        <div className="flex items-center space-x-2">
-                          <div className="text-right">
-                            <p className={`text-xs font-extrabold ${isMasuk ? 'text-emerald-600' : 'text-slate-800'}`}>
-                              {isMasuk ? '+' : '-'}{formatCurrency(tx.nominal)}
-                            </p>
-                            <span className="text-[9px] font-mono text-slate-400">
-                              {isMasuk ? 'Masuk' : 'Keluar'}
-                            </span>
-                          </div>
-                          
-                          <div className="flex items-center pl-2 space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onSelectTransaction(tx);
-                              }}
-                              className="p-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-700 cursor-pointer"
-                              title="Lihat Detail"
-                            >
-                              <Eye size={12} />
-                            </button>
-                            {onDeleteTransaction && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (confirm('Hapus pencatatan transaksi ini? Saldo amplop bersangkutan akan dipulihkan secara otomatis.')) {
-                                    onDeleteTransaction(tx.id);
-                                  }
-                                }}
-                                className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-500 hover:text-rose-700 cursor-pointer"
-                                title="Hapus"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
+                  {eligibleRollback && (
+                    <button
+                      onClick={async () => {
+                        if (confirm(`Batalkan transaksi ${formatCurrency(tx.amount)} dan kembalikan ke saldo amplop ${env?.name || ''}?`)) {
+                          await onDeleteTransaction(tx.$id || tx.id || '');
+                        }
+                      }}
+                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                      title="Rollback (Batalkan & Kembalikan Saldo)"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  )}
                 </div>
               </div>
             );

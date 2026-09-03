@@ -1,554 +1,513 @@
-import React, { useState, useEffect } from 'react';
-import { Kategori, Transaksi, JenisTransaksi, Arsip } from './types';
-import { DEFAULT_CATEGORIES, DEFAULT_TRANSACTIONS } from './initialData';
+import { useState, useEffect, useCallback } from 'react';
+import { Envelope, Transaction, Report, TabType, AppMode, DailyCamEntry, TextPasteItem } from './types';
+import {
+  getCurrentUser,
+  loginWithGoogle,
+  logoutUser,
+  clearUserCache,
+  getEnvelopes,
+  createEnvelope,
+  updateEnvelope,
+  deleteEnvelope,
+  getTransactions,
+  createTransaction,
+  deleteTransaction,
+  getReports,
+  createReport,
+  getDailyCamEntries,
+  createDailyCamEntry,
+  deleteDailyCamEntry,
+  getTextPasteItems,
+  createTextPasteItem,
+  updateTextPasteItem,
+  deleteTextPasteItem
+} from './services/appwrite';
+import { runScheduledChecks } from './utils/budgetLogic';
+import { getNotificationPermissionStatus, subscribeToNotifications } from './utils/notificationHelper';
+import { HeaderNav } from './components/HeaderNav';
+import { BottomNav } from './components/BottomNav';
 import { DashboardView } from './components/DashboardView';
 import { TransactionView } from './components/TransactionView';
 import { HistoryView } from './components/HistoryView';
-import { ArchiveView } from './components/ArchiveView';
-import { TransactionDetailsModal } from './components/TransactionDetailsModal';
-import { IconHelper } from './components/IconHelper';
-import { Wallet, PlusCircle, History, RotateCcw, Smartphone, Coins, Download, Upload, Archive } from 'lucide-react';
+import { LaporanView } from './components/LaporanView';
+import { DailyCamView } from './components/DailyCamView';
+import { TextPasteView } from './components/TextPasteView';
+import { EnvelopeModal } from './components/EnvelopeModal';
+import { SidebarDrawer } from './components/SidebarDrawer';
+import { LoginView } from './components/LoginView';
+import { Models } from 'appwrite';
 import { motion, AnimatePresence } from 'motion/react';
 
-type TabType = 'home' | 'add' | 'history' | 'archive';
-
 export default function App() {
-  // 1. Core state initialized from localStorage or defaults
-  const [kategoriList, setKategoriList] = useState<Kategori[]>([]);
-  const [transaksiList, setTransaksiList] = useState<Transaksi[]>([]);
-  const [arsipList, setArsipList] = useState<Arsip[]>([]);
+  const [currentUser, setCurrentUser] = useState<Models.User<Models.Preferences> | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
+
+  // Active App Mode: 'amplop' | 'dailycam' | 'textpaste'
+  const [activeMode, setActiveMode] = useState<AppMode>('amplop');
+
+  // Account-level optional toggle for monthly auto-debt
+  const [isMonthlyAutoDebtEnabled, setIsMonthlyAutoDebtEnabled] = useState<boolean>(true);
+
+  // Amplop State
+  const [envelopes, setEnvelopes] = useState<Envelope[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [reports, setReports] = useState<Report[]>([]);
   const [activeTab, setActiveTab] = useState<TabType>('home');
-  const [preselectedCategory, setPreselectedCategory] = useState<string>('');
+  const [preselectedEnvelopeId, setPreselectedEnvelopeId] = useState<string>('');
 
-  // Selected transaction for details sheet modal
-  const [selectedTransaction, setSelectedTransaction] = useState<Transaksi | null>(null);
-  const [isDetailsOpen, setIsDetailsOpen] = useState<boolean>(false);
+  // DailyCam State
+  const [dailyCamEntries, setDailyCamEntries] = useState<DailyCamEntry[]>([]);
 
-  // Load initial data
-  useEffect(() => {
-    const savedKategori = localStorage.getItem('kb_kategori_list');
-    const savedTransaksi = localStorage.getItem('kb_transaksi_list');
-    const savedArsip = localStorage.getItem('kb_arsip_list');
+  // TextPaste State
+  const [textPasteItems, setTextPasteItems] = useState<TextPasteItem[]>([]);
 
-    if (savedKategori && savedTransaksi) {
-      setKategoriList(JSON.parse(savedKategori));
-      setTransaksiList(JSON.parse(savedTransaksi));
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isEnvelopeModalOpen, setIsEnvelopeModalOpen] = useState(false);
+  const [selectedEnvelopeForModal, setSelectedEnvelopeForModal] = useState<Envelope | null>(null);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+
+  // 1. Check Google Auth Session on startup
+  const checkAuth = useCallback(async () => {
+    setIsLoadingAuth(true);
+    const user = await getCurrentUser();
+    if (user) {
+      setCurrentUser(user);
+      setIsAuthenticated(true);
+      await loadDatabaseData(user.$id);
     } else {
-      // Use standard default seeds
-      setKategoriList(DEFAULT_CATEGORIES);
-      setTransaksiList(DEFAULT_TRANSACTIONS);
-      localStorage.setItem('kb_kategori_list', JSON.stringify(DEFAULT_CATEGORIES));
-      localStorage.setItem('kb_transaksi_list', JSON.stringify(DEFAULT_TRANSACTIONS));
+      setCurrentUser(null);
+      setIsAuthenticated(false);
     }
-
-    if (savedArsip) {
-      setArsipList(JSON.parse(savedArsip));
-    } else {
-      setArsipList([]);
-      localStorage.setItem('kb_arsip_list', JSON.stringify([]));
-    }
+    setIsLoadingAuth(false);
   }, []);
 
-  // Persist state changes
-  const saveState = (
-    updatedCats: Kategori[],
-    updatedTxs: Transaksi[],
-    updatedArsip: Arsip[] = arsipList
+  // 2. Load Appwrite Database collections strictly scoped to user ID
+  const loadDatabaseData = async (userId: string) => {
+    setIsLoadingData(true);
+
+    const savedAutoDebtSetting = localStorage.getItem(`mb_setting_auto_debt_${userId}`);
+    const autoDebtEnabled = savedAutoDebtSetting !== null ? savedAutoDebtSetting === 'true' : true;
+    setIsMonthlyAutoDebtEnabled(autoDebtEnabled);
+
+    let [loadedEnv, loadedTx, loadedRep, loadedCam, loadedPaste] = await Promise.all([
+      getEnvelopes(userId),
+      getTransactions(userId),
+      getReports(userId),
+      getDailyCamEntries(userId),
+      getTextPasteItems(userId)
+    ]);
+
+    // Auto-sync current device push subscriber to Appwrite database if permission is granted
+    if (getNotificationPermissionStatus() === 'granted') {
+      const isPushEnabled = localStorage.getItem(`mb_push_enabled_${userId}`) !== 'false';
+      if (isPushEnabled) {
+        subscribeToNotifications(userId).catch(e => console.warn('Push auto-sync background error:', e));
+      }
+    }
+
+    let finalEnvelopes = loadedEnv;
+    let finalReports = loadedRep;
+    let finalTransactions = loadedTx;
+
+    if (autoDebtEnabled) {
+      const today = new Date();
+      const checkResult = runScheduledChecks(loadedEnv, today, loadedRep, loadedTx);
+
+      if (checkResult.hasChanges) {
+        finalEnvelopes = checkResult.updatedEnvelopes;
+        for (const env of finalEnvelopes) {
+          if (env.$id || env.id) {
+            await updateEnvelope(env.$id || env.id || '', env, userId);
+          }
+        }
+
+        if (checkResult.newReport) {
+          const createdRep = await createReport(checkResult.newReport, userId);
+          finalReports = [createdRep, ...finalReports];
+
+          // Clear previous month active transactions after archiving to report
+          for (const tx of loadedTx) {
+            if (tx.$id || tx.id) {
+              await deleteTransaction(tx.$id || tx.id || '', userId);
+            }
+          }
+          finalTransactions = [];
+        }
+      }
+    }
+
+    setEnvelopes(finalEnvelopes);
+    setTransactions(finalTransactions);
+    setReports(finalReports);
+    setDailyCamEntries(loadedCam);
+    setTextPasteItems(loadedPaste);
+    setIsLoadingData(false);
+  };
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  // Toggle account-level Auto-Debt setting
+  const handleToggleMonthlyAutoDebt = (enabled: boolean) => {
+    setIsMonthlyAutoDebtEnabled(enabled);
+    if (currentUser?.$id) {
+      localStorage.setItem(`mb_setting_auto_debt_${currentUser.$id}`, String(enabled));
+    }
+  };
+
+  // Auth Handlers
+  const handleLoginGoogle = () => {
+    loginWithGoogle();
+  };
+
+  const handleLogout = async () => {
+    const userId = currentUser?.$id;
+    await logoutUser();
+    clearUserCache(userId);
+    setCurrentUser(null);
+    setIsAuthenticated(false);
+    setEnvelopes([]);
+    setTransactions([]);
+    setReports([]);
+    setDailyCamEntries([]);
+    setTextPasteItems([]);
+    setActiveMode('amplop');
+  };
+
+  // Handler: Manual Scheduled Check
+  const handleRunScheduledCheck = async () => {
+    const userId = currentUser?.$id;
+    const today = new Date();
+    const checkResult = runScheduledChecks(envelopes, today, reports, transactions);
+    if (checkResult.hasChanges) {
+      const updated = checkResult.updatedEnvelopes;
+      for (const env of updated) {
+        if (env.$id || env.id) {
+          await updateEnvelope(env.$id || env.id || '', env, userId);
+        }
+      }
+      let currentReports = reports;
+      if (checkResult.newReport) {
+        const rep = await createReport(checkResult.newReport, userId);
+        currentReports = [rep, ...currentReports];
+        setReports(currentReports);
+
+        for (const tx of transactions) {
+          if (tx.$id || tx.id) {
+            await deleteTransaction(tx.$id || tx.id || '', userId);
+          }
+        }
+        setTransactions([]);
+      }
+      setEnvelopes(updated);
+    }
+  };
+
+  // Handler: Force EOM Rollover simulation
+  const handleTriggerEomRolloverManually = async () => {
+    const simDate = new Date();
+    simDate.setDate(1);
+    const checkResult = runScheduledChecks(envelopes, simDate, reports, transactions);
+
+    if (checkResult.newReport) {
+      const simulatedReport: Report = {
+        ...checkResult.newReport,
+        $id: `sim-rep-${Date.now()}`,
+        id: `sim-rep-${Date.now()}`
+      };
+      setReports(prev => [simulatedReport, ...prev]);
+      setTransactions([]);
+    }
+
+    if (checkResult.hasChanges) {
+      setEnvelopes(checkResult.updatedEnvelopes);
+    }
+  };
+
+  // Envelope CRUD
+  const handleSaveEnvelope = async (
+    envelopeData: Omit<Envelope, '$id' | 'id'>,
+    id?: string
   ) => {
-    setKategoriList(updatedCats);
-    setTransaksiList(updatedTxs);
-    setArsipList(updatedArsip);
-    localStorage.setItem('kb_kategori_list', JSON.stringify(updatedCats));
-    localStorage.setItem('kb_transaksi_list', JSON.stringify(updatedTxs));
-    localStorage.setItem('kb_arsip_list', JSON.stringify(updatedArsip));
-  };
-
-  // 2. Action Handlers
-  // Record standard top up / expense transactions
-  const handleAddTransaction = (data: {
-    jenis: JenisTransaksi;
-    nominal: number;
-    kategoriName: string;
-    catatan: string;
-    tanggal: string;
-  }) => {
-    const newTx: Transaksi = {
-      id: `tx-${Date.now()}`,
-      jenis: data.jenis,
-      nominal: data.nominal,
-      kategori: data.kategoriName,
-      catatan: data.catatan,
-      tanggal: data.tanggal
-    };
-
-    // Update the categories balance
-    const updatedCats = kategoriList.map(cat => {
-      if (cat.nama === data.kategoriName) {
-        if (data.jenis === 'masuk') {
-          return { ...cat, saldo_saat_ini: cat.saldo_saat_ini + data.nominal };
-        } else {
-          return { ...cat, saldo_saat_ini: cat.saldo_saat_ini - data.nominal };
-        }
-      }
-      return cat;
-    });
-
-    const updatedTxs = [newTx, ...transaksiList];
-    saveState(updatedCats, updatedTxs);
-  };
-
-  // Add category dynamically (with automatic top-up transaction if initial balance > 0)
-  const handleAddCategory = (data: {
-    nama: string;
-    saldoAwal: number;
-    warna: string;
-    icon: string;
-    rekomendasi_aktif?: boolean;
-  }) => {
-    const newCat: Kategori = {
-      id: `cat-${Date.now()}`,
-      nama: data.nama,
-      saldo_saat_ini: data.saldoAwal,
-      warna: data.warna,
-      icon: data.icon,
-      rekomendasi_aktif: data.rekomendasi_aktif || false
-    };
-
-    const updatedCats = [...kategoriList, newCat];
-    let updatedTxs = [...transaksiList];
-
-    // If initial balance is added, log it as an income transaction
-    if (data.saldoAwal > 0) {
-      const initialTx: Transaksi = {
-        id: `tx-init-${Date.now()}`,
-        jenis: 'masuk',
-        nominal: data.saldoAwal,
-        kategori: data.nama,
-        catatan: `Saldo awal untuk amplop baru "${data.nama}"`,
-        tanggal: new Date().toISOString()
-      };
-      updatedTxs = [initialTx, ...updatedTxs];
-    }
-
-    saveState(updatedCats, updatedTxs);
-  };
-
-  // Delete transaction (revert categories balance)
-  const handleDeleteTransaction = (id: string) => {
-    const targetTx = transaksiList.find(t => t.id === id);
-    if (!targetTx) return;
-
-    // Revert category balance adjustment
-    const updatedCats = kategoriList.map(cat => {
-      if (cat.nama === targetTx.kategori) {
-        if (targetTx.jenis === 'masuk') {
-          // Subtract top up value
-          return { ...cat, saldo_saat_ini: Math.max(0, cat.saldo_saat_ini - targetTx.nominal) };
-        } else {
-          // Return expense value back to envelope
-          return { ...cat, saldo_saat_ini: cat.saldo_saat_ini + targetTx.nominal };
-        }
-      }
-      return cat;
-    });
-
-    const updatedTxs = transaksiList.filter(t => t.id !== id);
-    saveState(updatedCats, updatedTxs);
-  };
-
-  // Delete category and all associated transactions
-  const handleDeleteCategory = (categoryId: string) => {
-    const targetCat = kategoriList.find(c => c.id === categoryId);
-    if (!targetCat) return;
-
-    if (confirm(`Apakah Anda yakin ingin menghapus amplop "${targetCat.nama}"? Semua transaksi yang berhubungan dengan amplop ini akan ikut terhapus secara permanen.`)) {
-      const updatedCats = kategoriList.filter(c => c.id !== categoryId);
-      const updatedTxs = transaksiList.filter(tx => tx.kategori !== targetCat.nama);
-      saveState(updatedCats, updatedTxs);
+    const userId = currentUser?.$id;
+    if (id) {
+      await updateEnvelope(id, envelopeData, userId);
+      setEnvelopes(prev =>
+        prev.map(e => ((e.$id === id || e.id === id) ? { ...envelopeData, user_id: userId, $id: id, id } : e))
+      );
+    } else {
+      const created = await createEnvelope(envelopeData, userId);
+      setEnvelopes(prev => [...prev, created]);
     }
   };
 
-  // Update existing category details
-  const handleUpdateCategory = (categoryId: string, data: {
-    nama: string;
-    warna: string;
-    icon: string;
-    rekomendasi_aktif: boolean;
-  }) => {
-    const oldCat = kategoriList.find(c => c.id === categoryId);
-    if (!oldCat) return;
+  const handleDeleteEnvelope = async (id: string) => {
+    const userId = currentUser?.$id;
+    await deleteEnvelope(id, userId);
+    setEnvelopes(prev => prev.filter(e => e.$id !== id && e.id !== id));
+  };
 
-    const oldName = oldCat.nama;
-    const newName = data.nama.trim();
+  // Transaction CRUD & Rollback
+  const handleAddTransaction = async (
+    envelopeId: string,
+    amount: number,
+    note: string,
+    dateIso: string
+  ) => {
+    const userId = currentUser?.$id;
+    const targetEnv = envelopes.find(e => (e.$id || e.id) === envelopeId);
+    if (!targetEnv) throw new Error('Amplop tidak ditemukan');
 
-    // Prevent duplicate category names
-    if (newName !== oldName && kategoriList.some(c => c.nama.toLowerCase() === newName.toLowerCase())) {
-      alert(`Gagal mengubah nama. Amplop dengan nama "${newName}" sudah ada!`);
-      return;
+    const newTx = await createTransaction({
+      envelope_id: envelopeId,
+      amount,
+      note,
+      timestamp: dateIso
+    }, userId);
+
+    const newActiveBalance = Math.max(0, (targetEnv.active_balance || 0) - amount);
+    await updateEnvelope(envelopeId, { active_balance: newActiveBalance }, userId);
+
+    setEnvelopes(prev =>
+      prev.map(e =>
+        (e.$id === envelopeId || e.id === envelopeId)
+          ? { ...e, active_balance: newActiveBalance }
+          : e
+      )
+    );
+    setTransactions(prev => [newTx, ...prev]);
+  };
+
+  const handleDeleteTransaction = async (transactionId: string) => {
+    const userId = currentUser?.$id;
+    const tx = transactions.find(t => (t.$id || t.id) === transactionId);
+    if (!tx) return;
+
+    await deleteTransaction(transactionId, userId);
+
+    const targetEnv = envelopes.find(e => (e.$id || e.id) === tx.envelope_id);
+    if (targetEnv) {
+      const restoredActiveBalance = (targetEnv.active_balance || 0) + tx.amount;
+      await updateEnvelope(tx.envelope_id, { active_balance: restoredActiveBalance }, userId);
+
+      setEnvelopes(prev =>
+        prev.map(e =>
+          (e.$id === tx.envelope_id || e.id === tx.envelope_id)
+            ? { ...e, active_balance: restoredActiveBalance }
+            : e
+        )
+      );
     }
 
-    const updatedCats = kategoriList.map(cat => {
-      if (cat.id === categoryId) {
-        return {
-          ...cat,
-          nama: newName,
-          warna: data.warna,
-          icon: data.icon,
-          rekomendasi_aktif: data.rekomendasi_aktif
-        };
-      }
-      return cat;
-    });
-
-    const updatedTxs = transaksiList.map(tx => {
-      if (tx.kategori === oldName) {
-        return { ...tx, kategori: newName };
-      }
-      return tx;
-    });
-
-    saveState(updatedCats, updatedTxs);
+    setTransactions(prev => prev.filter(t => t.$id !== transactionId && t.id !== transactionId));
   };
 
-  // Archive current month's data
-  const handleArchiveCurrentMonth = () => {
-    const targetBulan = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(new Date());
-
-    if (arsipList.some((a) => a.bulan === targetBulan)) {
-      alert(`Tidak bisa mengarsipkan 2x di bulan yang sama (${targetBulan}), kecuali yang lama dihapus di menu arsip.`);
-      return;
-    }
-
-    if (confirm(`Apakah Anda yakin ingin mengarsipkan seluruh data bulan ini (${targetBulan})? Semua transaksi akan dipindahkan ke dalam arsip bulanan, saldo kategori Anda akan dikosongkan kembali menjadi nol untuk memulai bulan baru.`)) {
-      const newArchive: Arsip = {
-        id: `archive-${Date.now()}`,
-        bulan: targetBulan,
-        kategoriList: JSON.parse(JSON.stringify(kategoriList)), // deep copy
-        transaksiList: JSON.parse(JSON.stringify(transaksiList)), // deep copy
-        tanggalArsip: new Date().toISOString()
-      };
-
-      const updatedArsip = [newArchive, ...arsipList];
-      // Reset current state for new month
-      const updatedCats = kategoriList.map(cat => ({ ...cat, saldo_saat_ini: 0 }));
-      const updatedTxs: Transaksi[] = [];
-
-      saveState(updatedCats, updatedTxs, updatedArsip);
-      alert(`Data bulan ini berhasil dimasukkan ke dalam arsip ${targetBulan}! Mulai catat bulan baru dengan amplop kosong.`);
-      setActiveTab('archive');
-    }
+  // DailyCam CRUD Handlers
+  const handleSaveDailyCamPhoto = async (photoInput: Blob | string, dayNumber: number, note?: string) => {
+    const userId = currentUser?.$id;
+    const newEntry = await createDailyCamEntry({ day_number: dayNumber, note }, photoInput, userId);
+    setDailyCamEntries(prev => [...prev, newEntry]);
   };
 
-  // Delete an archive item
-  const handleDeleteArchive = (archiveId: string) => {
-    const targetArsip = arsipList.find((a) => a.id === archiveId);
-    if (!targetArsip) return;
-
-    if (confirm(`Apakah Anda yakin ingin menghapus arsip bulan "${targetArsip.bulan}" secara permanen? Tindakan ini tidak dapat dibatalkan.`)) {
-      const updatedArsip = arsipList.filter((a) => a.id !== archiveId);
-      saveState(kategoriList, transaksiList, updatedArsip);
-    }
+  const handleDeleteDailyCamPhoto = async (id: string, fileId?: string) => {
+    const userId = currentUser?.$id;
+    await deleteDailyCamEntry(id, fileId, userId);
+    setDailyCamEntries(prev => prev.filter(e => e.$id !== id && e.id !== id));
   };
 
-  // Clear or reset all storage to default seed
-  const handleResetData = () => {
-    if (confirm('Apakah Anda yakin ingin menyetel ulang data kembali ke setelan default? Seluruh perubahan kustom Anda akan dihapus.')) {
-      setKategoriList(DEFAULT_CATEGORIES);
-      setTransaksiList(DEFAULT_TRANSACTIONS);
-      setArsipList([]);
-      localStorage.setItem('kb_kategori_list', JSON.stringify(DEFAULT_CATEGORIES));
-      localStorage.setItem('kb_transaksi_list', JSON.stringify(DEFAULT_TRANSACTIONS));
-      localStorage.setItem('kb_arsip_list', JSON.stringify([]));
-      setActiveTab('home');
-    }
+  // TextPaste CRUD Handlers
+  const handleAddTextPasteItem = async (item: Omit<TextPasteItem, '$id' | 'id'>) => {
+    const userId = currentUser?.$id;
+    const created = await createTextPasteItem(item, userId);
+    setTextPasteItems(prev => [created, ...prev]);
   };
 
-  // Backup data to JSON file
-  const handleBackupData = () => {
-    const dataStr = JSON.stringify({
-      kategoriList,
-      transaksiList,
-      arsipList,
-      version: '1.1.0',
-      timestamp: new Date().toISOString()
-    }, null, 2);
-    
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    const exportFileDefaultName = `KantongKu_Full_Backup_${new Date().toISOString().slice(0,10)}.json`;
-    
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', exportFileDefaultName);
-    linkElement.click();
+  const handleUpdateTextPasteItem = async (id: string, data: Partial<TextPasteItem>) => {
+    const userId = currentUser?.$id;
+    await updateTextPasteItem(id, data, userId);
+    setTextPasteItems(prev => prev.map(i => (i.$id === id || i.id === id ? { ...i, ...data } : i)));
   };
 
-  // Restore data from JSON file
-  const handleRestoreData = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const fileReader = new FileReader();
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    fileReader.onload = (e) => {
-      try {
-        const parsedData = JSON.parse(e.target?.result as string);
-        if (Array.isArray(parsedData.kategoriList) && Array.isArray(parsedData.transaksiList)) {
-          const restoredArsip = Array.isArray(parsedData.arsipList) ? parsedData.arsipList : [];
-          saveState(parsedData.kategoriList, parsedData.transaksiList, restoredArsip);
-          alert('Data fungsional berhasil dipulihkan dari file backup!');
-          setActiveTab('home');
-        } else {
-          alert('Format file backup tidak valid.');
-        }
-      } catch (err) {
-        alert('Gagal membaca file backup. Pastikan file berformat JSON yang valid.');
-      }
-    };
-    fileReader.readAsText(file);
-    event.target.value = ''; // clear input value so it can be re-uploaded if needed
+  const handleDeleteTextPasteItem = async (id: string) => {
+    const userId = currentUser?.$id;
+    await deleteTextPasteItem(id, userId);
+    setTextPasteItems(prev => prev.filter(i => i.$id !== id && i.id !== id));
   };
 
-  const handleSelectCategoryFromDashboard = (categoryName: string) => {
-    setPreselectedCategory(categoryName);
-    setActiveTab('add');
+  const handleOpenEnvelopeModal = (envelope?: Envelope) => {
+    setSelectedEnvelopeForModal(envelope || null);
+    setIsEnvelopeModalOpen(true);
   };
 
-  const handleOpenDetails = (tx: Transaksi) => {
-    setSelectedTransaction(tx);
-    setIsDetailsOpen(true);
+  const handleNavigateToTransaction = (envelopeId?: string) => {
+    if (envelopeId) setPreselectedEnvelopeId(envelopeId);
+    setActiveTab('transaksi');
   };
 
+  const totalOverallBalance = envelopes.reduce(
+    (sum, env) => sum + (env.active_balance || 0) + (env.reserve_balance || 0),
+    0
+  );
+
+  // Dynamic selection highlight class based on mode
+  const selectionClass = activeMode === 'dailycam'
+    ? 'selection:bg-blue-200'
+    : activeMode === 'textpaste'
+    ? 'selection:bg-emerald-200'
+    : 'selection:bg-amber-200';
+
+  // Loading spinner during initial auth check
+  if (isLoadingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center space-y-4 p-4 text-slate-100 font-sans">
+        <div className="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+        <div className="font-semibold text-sm text-slate-300">Memeriksa Sesi Google Auth...</div>
+      </div>
+    );
+  }
+
+  // RESTRICTED ACCESS: Show LoginView if user is NOT authenticated
+  if (!isAuthenticated) {
+    return <LoginView onLoginWithGoogle={handleLoginGoogle} isLoading={isLoadingAuth} />;
+  }
+
+  // AUTHENTICATED ACCESS: Main MyBox App UI
   return (
-    <div className="min-h-screen bg-slate-900 flex justify-center items-center py-0 md:py-10 px-0 md:px-4 font-sans antialiased text-slate-800 overflow-hidden">
-      {/* Dynamic desktop smartphone wrap frame to emphasize the Mobile-First UI approach */}
-      <div className="w-full max-w-md h-screen md:h-[850px] max-h-screen md:max-h-[850px] md:rounded-[40px] bg-slate-50 md:shadow-2xl md:border-[10px] md:border-slate-800 flex flex-col overflow-hidden relative">
-        
-        {/* Dynamic Notch / Status indicator for mobile screen flavor */}
-        <div className="hidden md:flex justify-between items-center bg-slate-50 px-8 pt-3 pb-1 text-[11px] font-bold text-slate-400 font-mono select-none">
-          <span>09:41 AM</span>
-          <div className="w-20 h-4 bg-slate-800 rounded-full mx-auto -mt-1.5 flex items-center justify-center">
-            <div className="w-3 h-3 rounded-full bg-slate-950 ml-auto mr-1 border border-slate-700"></div>
+    <div className={`min-h-screen bg-slate-100 font-sans text-slate-900 ${activeMode === 'amplop' ? 'pb-16' : 'pb-6'} ${selectionClass}`}>
+      {/* Top Header with Mode Dropdown Switcher */}
+      <HeaderNav
+        activeMode={activeMode}
+        onSelectMode={setActiveMode}
+        onOpenDrawer={() => setIsDrawerOpen(true)}
+        totalActiveBalance={totalOverallBalance}
+      />
+
+      {/* Main Body View Switching with Motion Transition */}
+      <main className="max-w-md mx-auto overflow-hidden">
+        {isLoadingData ? (
+          <div className="py-16 text-center text-xs text-slate-500 space-y-2">
+            <div className={`w-8 h-8 border-3 border-t-transparent rounded-full animate-spin mx-auto ${
+              activeMode === 'dailycam' ? 'border-blue-500' : activeMode === 'textpaste' ? 'border-emerald-500' : 'border-amber-500'
+            }`}></div>
+            <div>Memuat data database akun Anda...</div>
           </div>
-          <div className="flex items-center space-x-1.5">
-            <span>5G</span>
-            <div className="w-5 h-2.5 border border-slate-400 rounded-xs p-0.5 flex items-center">
-              <div className="w-full h-full bg-slate-400 rounded-2xs"></div>
-            </div>
-          </div>
-        </div>
-
-        {/* Dynamic header title line */}
-        <header className="px-5 py-4 border-b border-slate-100 bg-white flex items-center justify-between shadow-xs">
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold">
-              $
-            </div>
-            <span className="font-extrabold text-sm tracking-tight text-slate-800">KantongKu</span>
-          </div>
-
-          <div className="flex items-center space-x-1.5">
-            {/* Backup Button */}
-            <button
-              onClick={handleBackupData}
-              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold transition-all cursor-pointer shadow-xs border border-indigo-100/30"
-              title="Backup Data ke file JSON"
-            >
-              <Download size={11} />
-              <span>Backup</span>
-            </button>
-
-            {/* Restore Button */}
-            <label
-              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold transition-all cursor-pointer shadow-xs border border-slate-200/40 relative"
-              title="Restore Data dari file JSON"
-            >
-              <Upload size={11} />
-              <span>Restore</span>
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleRestoreData}
-                className="hidden absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-              />
-            </label>
-
-            {/* Reset Fallback Button */}
-            <button
-              onClick={handleResetData}
-              className="p-1.5 rounded-lg bg-slate-50 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-all cursor-pointer"
-              title="Setel Ulang Data ke Default"
-            >
-              <RotateCcw size={11} />
-            </button>
-          </div>
-        </header>
-
-        {/* Content Area - Scrollable with custom styling */}
-        <main className="flex-1 overflow-y-auto px-6 pt-5 pb-28 no-scrollbar">
+        ) : (
           <AnimatePresence mode="wait">
-            {activeTab === 'home' && (
+            {activeMode === 'dailycam' && (
               <motion.div
-                key="dashboard"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 10 }}
-                transition={{ duration: 0.2 }}
-              >
-                <DashboardView
-                  kategoriList={kategoriList}
-                  transaksiList={transaksiList}
-                  onSelectCategory={handleSelectCategoryFromDashboard}
-                  onNavigateToAddTransaction={() => {
-                    setPreselectedCategory('');
-                    setActiveTab('add');
-                  }}
-                  onDeleteCategory={handleDeleteCategory}
-                  onArchiveCurrentMonth={handleArchiveCurrentMonth}
-                  onUpdateCategory={handleUpdateCategory}
-                />
-              </motion.div>
-            )}
-
-            {activeTab === 'add' && (
-              <motion.div
-                key="add"
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.98 }}
-                transition={{ duration: 0.2 }}
-              >
-                <TransactionView
-                  kategoriList={kategoriList}
-                  onAddTransaction={handleAddTransaction}
-                  onAddCategory={handleAddCategory}
-                  preselectedCategory={preselectedCategory}
-                />
-              </motion.div>
-            )}
-
-            {activeTab === 'history' && (
-              <motion.div
-                key="history"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                transition={{ duration: 0.2 }}
-              >
-                <HistoryView
-                  transaksiList={transaksiList}
-                  kategoriList={kategoriList}
-                  onSelectTransaction={handleOpenDetails}
-                  onDeleteTransaction={handleDeleteTransaction}
-                />
-              </motion.div>
-            )}
-
-            {activeTab === 'archive' && (
-              <motion.div
-                key="archive"
-                initial={{ opacity: 0, y: 10 }}
+                key="dailycam-mode"
+                initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.2, ease: 'easeInOut' }}
               >
-                <ArchiveView
-                  arsipList={arsipList}
-                  onDeleteArchive={handleDeleteArchive}
+                <DailyCamView
+                  entries={dailyCamEntries}
+                  onSavePhoto={handleSaveDailyCamPhoto}
+                  onDeletePhoto={handleDeleteDailyCamPhoto}
+                  isLoading={isLoadingData}
                 />
+              </motion.div>
+            )}
+
+            {activeMode === 'textpaste' && (
+              <motion.div
+                key="textpaste-mode"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.2, ease: 'easeInOut' }}
+              >
+                <TextPasteView
+                  items={textPasteItems}
+                  onAddItem={handleAddTextPasteItem}
+                  onUpdateItem={handleUpdateTextPasteItem}
+                  onDeleteItem={handleDeleteTextPasteItem}
+                  isLoading={isLoadingData}
+                />
+              </motion.div>
+            )}
+
+            {activeMode === 'amplop' && (
+              <motion.div
+                key={`amplop-${activeTab}`}
+                initial={{ opacity: 0, x: 25 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -25 }}
+                transition={{ duration: 0.22, ease: 'easeInOut' }}
+              >
+                {activeTab === 'home' && (
+                  <DashboardView
+                    envelopes={envelopes}
+                    onOpenEnvelopeModal={handleOpenEnvelopeModal}
+                    onNavigateToTransaction={handleNavigateToTransaction}
+                  />
+                )}
+
+                {activeTab === 'transaksi' && (
+                  <TransactionView
+                    envelopes={envelopes}
+                    preselectedEnvelopeId={preselectedEnvelopeId}
+                    onAddTransaction={handleAddTransaction}
+                    onNavigateToRiwayat={() => setActiveTab('riwayat')}
+                  />
+                )}
+
+                {activeTab === 'riwayat' && (
+                  <HistoryView
+                    transactions={transactions}
+                    envelopes={envelopes}
+                    onDeleteTransaction={handleDeleteTransaction}
+                  />
+                )}
+
+                {activeTab === 'laporan' && (
+                  <LaporanView
+                    reports={reports}
+                    onTriggerEomRolloverManually={handleTriggerEomRolloverManually}
+                  />
+                )}
               </motion.div>
             )}
           </AnimatePresence>
-        </main>
+        )}
+      </main>
 
-        {/* Floating Bottom Navigation Bar */}
-        <nav className="absolute bottom-4 left-3 right-3 bg-white/90 backdrop-blur-md border border-slate-100/80 py-2 px-3 flex items-center justify-around rounded-2xl shadow-xl z-30">
-          {/* Tab 1: Home Dashboard */}
-          <button
-            onClick={() => setActiveTab('home')}
-            className={`flex flex-col items-center space-y-1 py-1 px-2.5 rounded-xl transition-all cursor-pointer relative ${
-              activeTab === 'home' ? 'text-indigo-600 scale-105' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            <Wallet size={19} className={activeTab === 'home' ? 'stroke-[2.5px]' : 'stroke-2'} />
-            <span className="text-[9px] font-bold">Dashboard</span>
-            {activeTab === 'home' && (
-              <motion.div
-                layoutId="activeDot"
-                className="absolute -bottom-1 w-1.5 h-1.5 rounded-full bg-indigo-600"
-              />
-            )}
-          </button>
+      {/* Bottom Navigation Bar (Only for Amplop Mode) */}
+      {activeMode === 'amplop' && (
+        <BottomNav
+          activeTab={activeTab}
+          onSelectTab={tab => setActiveTab(tab)}
+        />
+      )}
 
-          {/* Tab 2: Add Transaction / Category */}
-          <button
-            onClick={() => {
-              setPreselectedCategory('');
-              setActiveTab('add');
-            }}
-            className={`flex flex-col items-center space-y-1 py-1 px-2.5 rounded-xl transition-all cursor-pointer relative ${
-              activeTab === 'add' ? 'text-indigo-600 scale-105' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            <PlusCircle size={19} className={activeTab === 'add' ? 'stroke-[2.5px]' : 'stroke-2'} />
-            <span className="text-[9px] font-bold">Catat</span>
-            {activeTab === 'add' && (
-              <motion.div
-                layoutId="activeDot"
-                className="absolute -bottom-1 w-1.5 h-1.5 rounded-full bg-indigo-600"
-              />
-            )}
-          </button>
+      {/* Sidebar Drawer */}
+      <SidebarDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        activeMode={activeMode}
+        envelopes={envelopes}
+        onOpenEnvelopeModal={handleOpenEnvelopeModal}
+        onRunScheduledCheck={handleRunScheduledCheck}
+        isAppwriteConnected={true}
+        userId={currentUser?.$id}
+        userEmail={currentUser?.email || currentUser?.name || 'User Google'}
+        onLogout={handleLogout}
+        isMonthlyAutoDebtEnabled={isMonthlyAutoDebtEnabled}
+        onToggleMonthlyAutoDebt={handleToggleMonthlyAutoDebt}
+      />
 
-          {/* Tab 3: History Timeline */}
-          <button
-            onClick={() => setActiveTab('history')}
-            className={`flex flex-col items-center space-y-1 py-1 px-2.5 rounded-xl transition-all cursor-pointer relative ${
-              activeTab === 'history' ? 'text-indigo-600 scale-105' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            <History size={19} className={activeTab === 'history' ? 'stroke-[2.5px]' : 'stroke-2'} />
-            <span className="text-[9px] font-bold">Riwayat</span>
-            {activeTab === 'history' && (
-              <motion.div
-                layoutId="activeDot"
-                className="absolute -bottom-1 w-1.5 h-1.5 rounded-full bg-indigo-600"
-              />
-            )}
-          </button>
-
-          {/* Tab 4: Archive */}
-          <button
-            onClick={() => setActiveTab('archive')}
-            className={`flex flex-col items-center space-y-1 py-1 px-2.5 rounded-xl transition-all cursor-pointer relative ${
-              activeTab === 'archive' ? 'text-indigo-600 scale-105' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            <Archive size={19} className={activeTab === 'archive' ? 'stroke-[2.5px]' : 'stroke-2'} />
-            <span className="text-[9px] font-bold">Arsip</span>
-            {activeTab === 'archive' && (
-              <motion.div
-                layoutId="activeDot"
-                className="absolute -bottom-1 w-1.5 h-1.5 rounded-full bg-indigo-600"
-              />
-            )}
-          </button>
-        </nav>
-
-        {/* Popup Detail Transaction (Bottom Sheet Modal) */}
-        <AnimatePresence>
-          {isDetailsOpen && (
-            <TransactionDetailsModal
-              isOpen={isDetailsOpen}
-              onClose={() => {
-                setIsDetailsOpen(false);
-                setSelectedTransaction(null);
-              }}
-              transaction={selectedTransaction}
-              kategoriList={kategoriList}
-              onDeleteTransaction={handleDeleteTransaction}
-            />
-          )}
-        </AnimatePresence>
-      </div>
+      {/* Envelope Create/Edit Modal */}
+      <EnvelopeModal
+        isOpen={isEnvelopeModalOpen}
+        onClose={() => setIsEnvelopeModalOpen(false)}
+        envelope={selectedEnvelopeForModal}
+        onSave={handleSaveEnvelope}
+        onDelete={handleDeleteEnvelope}
+      />
     </div>
   );
 }
+

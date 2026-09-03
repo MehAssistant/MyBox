@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="boxGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5" />
+      <stop offset="100%" stop-color="#7C3AED" />
+    </linearGradient>
+    <linearGradient id="lidGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#8B5CF6" />
+    </linearGradient>
+  </defs>
+  <!-- Background Rounded Rect -->
+  <rect width="512" height="512" rx="128" fill="url(#boxGrad)" />
+  
+  <!-- Box Base Body -->
+  <path d="M120 230 L392 230 L372 410 C370 422 360 432 348 432 L164 432 C152 432 142 422 140 410 Z" fill="#3730A3" opacity="0.35"/>
+  <path d="M130 220 L382 220 L364 396 C362 406 354 414 344 414 L168 414 C158 414 150 406 148 396 Z" fill="#FFFFFF" opacity="0.95"/>
+  
+  <!-- Box Lid -->
+  <rect x="110" y="176" width="292" height="54" rx="14" fill="url(#lidGrad)" stroke="#FFFFFF" stroke-width="8"/>
+  
+  <!-- Ribbon Vertical -->
+  <rect x="236" y="176" width="40" height="238" fill="#F59E0B" />
+  
+  <!-- Ribbon Knot / Bow -->
+  <path d="M210 145 C180 110 210 90 240 135 C246 144 252 155 256 168 C260 155 266 144 272 135 C302 90 332 110 302 145 C286 164 268 174 256 178 C244 174 226 164 210 145 Z" fill="#FBBF24" stroke="#D97706" stroke-width="4"/>
+  <circle cx="256" cy="172" r="14" fill="#D97706" />
+
+  <!-- Money / Sparkle badge symbol inside box -->
+  <circle cx="256" cy="300" r="38" fill="#10B981" />
+  <text x="256" y="314" font-family="Arial, sans-serif" font-size="40" font-weight="bold" fill="#FFFFFF" text-anchor="middle">Rp</text>
+</svg>
