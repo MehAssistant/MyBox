@@ -111,8 +111,8 @@ export const TransactionView: React.FC<TransactionViewProps> = ({
                 <input
                   type="number"
                   required
-                  min="100"
-                  step="1000"
+                  min="1"
+                  step="any"
                   value={amount}
                   onChange={e => setAmount(e.target.value)}
                   placeholder="0"

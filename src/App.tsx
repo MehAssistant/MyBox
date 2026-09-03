@@ -249,6 +249,31 @@ export default function App() {
     setEnvelopes(prev => prev.filter(e => e.$id !== id && e.id !== id));
   };
 
+  const handleTopUpEnvelope = async (envelopeId: string) => {
+    const targetEnv = envelopes.find(e => (e.$id === envelopeId || e.id === envelopeId));
+    if (!targetEnv) return;
+
+    const topUpAmount = targetEnv.target_monthly || 0;
+    const newActiveBalance = (targetEnv.active_balance || 0) + topUpAmount;
+
+    const updatedData: Omit<Envelope, '$id' | 'id'> = {
+      name: targetEnv.name,
+      icon: targetEnv.icon,
+      color: targetEnv.color,
+      type: targetEnv.type,
+      target_monthly: targetEnv.target_monthly,
+      weekly_allowance: targetEnv.weekly_allowance,
+      active_balance: newActiveBalance,
+      reserve_balance: targetEnv.reserve_balance,
+      is_smart_rec: targetEnv.is_smart_rec,
+      is_auto_debt: targetEnv.is_auto_debt,
+      last_reset_phase: targetEnv.last_reset_phase,
+      last_reset_month: targetEnv.last_reset_month
+    };
+
+    await handleSaveEnvelope(updatedData, targetEnv.$id || targetEnv.id);
+  };
+
   // Transaction CRUD & Rollback
   const handleAddTransaction = async (
     envelopeId: string,
@@ -443,6 +468,7 @@ export default function App() {
                     envelopes={envelopes}
                     onOpenEnvelopeModal={handleOpenEnvelopeModal}
                     onNavigateToTransaction={handleNavigateToTransaction}
+                    onTopUpEnvelope={handleTopUpEnvelope}
                   />
                 )}
 

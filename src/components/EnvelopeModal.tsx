@@ -220,7 +220,7 @@ export const EnvelopeModal: React.FC<EnvelopeModalProps> = ({
               <input
                 type="number"
                 min="0"
-                step="5000"
+                step="any"
                 value={targetMonthly}
                 onChange={e => handleTargetChange(Number(e.target.value))}
                 className="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-amber-500 outline-none"
@@ -232,7 +232,7 @@ export const EnvelopeModal: React.FC<EnvelopeModalProps> = ({
               <input
                 type="number"
                 min="0"
-                step="5000"
+                step="any"
                 value={weeklyAllowance}
                 onChange={e => setWeeklyAllowance(Number(e.target.value))}
                 className="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-amber-500 outline-none"
