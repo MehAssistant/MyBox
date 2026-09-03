@@ -17,7 +17,8 @@ import {
   Wallet, 
   ShieldCheck, 
   Info,
-  Check
+  Check,
+  Download
 } from 'lucide-react';
 import { formatCurrency } from '../utils/dateHelper';
 import {
@@ -63,13 +64,50 @@ export const SidebarDrawer: React.FC<SidebarDrawerProps> = ({
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isRunningCheck, setIsRunningCheck] = useState(false);
 
+  // PWA Install Prompt State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isAppInstalled, setIsAppInstalled] = useState<boolean>(false);
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const perm = getNotificationPermissionStatus();
       const localFlag = localStorage.getItem(userId ? `mb_push_enabled_${userId}` : 'mb_push_enabled');
       setIsNotifActive(perm === 'granted' && localFlag === 'true');
+
+      // Check if already running in standalone PWA mode
+      if (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone) {
+        setIsAppInstalled(true);
+      }
+
+      const handleBeforeInstall = (e: Event) => {
+        e.preventDefault();
+        setDeferredPrompt(e);
+      };
+
+      const handleAppInstalled = () => {
+        setIsAppInstalled(true);
+        setDeferredPrompt(null);
+      };
+
+      window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.addEventListener('appinstalled', handleAppInstalled);
+
+      return () => {
+        window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+        window.removeEventListener('appinstalled', handleAppInstalled);
+      };
     }
   }, [isOpen, userId]);
+
+  const handleInstallPWA = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setIsAppInstalled(true);
+    }
+    setDeferredPrompt(null);
+  };
 
   // Toggle Push Notifications On/Off
   const handleToggleNotification = async (enabled: boolean) => {
@@ -214,6 +252,17 @@ export const SidebarDrawer: React.FC<SidebarDrawerProps> = ({
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* PWA Install Action Button (shown when installable via Chrome/Android) */}
+            {deferredPrompt && !isAppInstalled && (
+              <button
+                onClick={handleInstallPWA}
+                className="w-full py-2.5 px-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer"
+              >
+                <Download size={16} />
+                <span>Install Aplikasi Mybox</span>
+              </button>
             )}
 
             {/* SEGMENT CONTENT BASED ON ACTIVE MODE */}
