@@ -69,13 +69,16 @@ export const subscribeToNotifications = async (
 
     // Save local flag
     const key = userId ? `mb_push_enabled_${userId}` : 'mb_push_enabled';
+    const wasAlreadyActive = localStorage.getItem(key) === 'true';
     localStorage.setItem(key, 'true');
 
-    // Trigger confirmation notification
-    sendNotification(
-      '🔔 Notifikasi MyBox Aktif!',
-      `Perangkat "${deviceName}" berhasil dipasangkan dengan Firebase & Appwrite!`
-    );
+    // Only show welcome notification the FIRST TIME (not on every app open / re-register)
+    if (!wasAlreadyActive) {
+      sendNotification(
+        '🔔 Notifikasi MyBox Aktif!',
+        `Perangkat "${deviceName}" berhasil dipasangkan!`
+      );
+    }
 
     return {
       success: true,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Envelope, Transaction, Report, TabType, AppMode, DailyCamEntry, TextPasteItem } from './types';
+import { Envelope, Transaction, Report, TabType, AppMode, DailyCamEntry, TextPasteItem, Activity } from './types';
 import {
   getCurrentUser,
   loginWithGoogle,
@@ -27,7 +27,8 @@ import { getNotificationPermissionStatus, subscribeToNotifications } from './uti
 import { HeaderNav } from './components/HeaderNav';
 import { BottomNav } from './components/BottomNav';
 import { DashboardView } from './components/DashboardView';
-import { TransactionView } from './components/TransactionView';
+import { AktivitasView } from './components/AktivitasView';
+import { TransactionModal } from './components/TransactionModal';
 import { HistoryView } from './components/HistoryView';
 import { LaporanView } from './components/LaporanView';
 import { DailyCamView } from './components/DailyCamView';
@@ -53,8 +54,10 @@ export default function App() {
   const [envelopes, setEnvelopes] = useState<Envelope[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [activeTab, setActiveTab] = useState<TabType>('home');
   const [preselectedEnvelopeId, setPreselectedEnvelopeId] = useState<string>('');
+  const [isTransactionModalOpen, setIsTransactionModalOpen] = useState<boolean>(false);
 
   // DailyCam State
   const [dailyCamEntries, setDailyCamEntries] = useState<DailyCamEntry[]>([]);
@@ -66,6 +69,30 @@ export default function App() {
   const [isEnvelopeModalOpen, setIsEnvelopeModalOpen] = useState(false);
   const [selectedEnvelopeForModal, setSelectedEnvelopeForModal] = useState<Envelope | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
+
+  // Activity Handlers
+  const handleAddActivity = (act: Omit<Activity, '$id' | 'id'>) => {
+    const newActivity: Activity = {
+      ...act,
+      $id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      user_id: currentUser?.$id
+    };
+    setActivities(prev => {
+      const updated = [newActivity, ...prev];
+      if (currentUser?.$id) {
+        localStorage.setItem(`mybox_activities_${currentUser.$id}`, JSON.stringify(updated.slice(0, 100)));
+      }
+      return updated;
+    });
+  };
+
+  const handleClearActivities = () => {
+    setActivities([]);
+    if (currentUser?.$id) {
+      localStorage.removeItem(`mybox_activities_${currentUser.$id}`);
+    }
+  };
 
   // 1. Check Google Auth Session on startup
   const checkAuth = useCallback(async () => {
@@ -98,6 +125,15 @@ export default function App() {
       getTextPasteItems(userId)
     ]);
 
+    // Load saved activities from localStorage
+    const savedActs = localStorage.getItem(`mybox_activities_${userId}`);
+    let loadedActs: Activity[] = [];
+    if (savedActs) {
+      try {
+        loadedActs = JSON.parse(savedActs);
+      } catch (e) {}
+    }
+
     // Auto-sync current device push subscriber to Appwrite database if permission is granted
     if (getNotificationPermissionStatus() === 'granted') {
       const isPushEnabled = localStorage.getItem(`mb_push_enabled_${userId}`) !== 'false';
@@ -122,6 +158,11 @@ export default function App() {
           }
         }
 
+        if (checkResult.generatedActivities && checkResult.generatedActivities.length > 0) {
+          loadedActs = [...checkResult.generatedActivities, ...loadedActs];
+          localStorage.setItem(`mybox_activities_${userId}`, JSON.stringify(loadedActs.slice(0, 100)));
+        }
+
         if (checkResult.newReport) {
           const createdRep = await createReport(checkResult.newReport, userId);
           finalReports = [createdRep, ...finalReports];
@@ -140,6 +181,7 @@ export default function App() {
     setEnvelopes(finalEnvelopes);
     setTransactions(finalTransactions);
     setReports(finalReports);
+    setActivities(loadedActs);
     setDailyCamEntries(loadedCam);
     setTextPasteItems(loadedPaste);
     setIsLoadingData(false);
@@ -155,6 +197,12 @@ export default function App() {
     if (currentUser?.$id) {
       localStorage.setItem(`mb_setting_auto_debt_${currentUser.$id}`, String(enabled));
     }
+    handleAddActivity({
+      type: 'setting_change',
+      title: 'Pengaturan Auto Debt',
+      description: `Fitur Auto Debt bulanan telah ${enabled ? 'diaktifkan' : 'dinonaktifkan'}.`,
+      timestamp: new Date().toISOString()
+    });
   };
 
   // Auth Handlers
@@ -171,6 +219,7 @@ export default function App() {
     setEnvelopes([]);
     setTransactions([]);
     setReports([]);
+    setActivities([]);
     setDailyCamEntries([]);
     setTextPasteItems([]);
     setActiveMode('amplop');
@@ -188,6 +237,11 @@ export default function App() {
           await updateEnvelope(env.$id || env.id || '', env, userId);
         }
       }
+
+      if (checkResult.generatedActivities && checkResult.generatedActivities.length > 0) {
+        checkResult.generatedActivities.forEach(act => handleAddActivity(act));
+      }
+
       let currentReports = reports;
       if (checkResult.newReport) {
         const rep = await createReport(checkResult.newReport, userId);
@@ -210,6 +264,10 @@ export default function App() {
     const simDate = new Date();
     simDate.setDate(1);
     const checkResult = runScheduledChecks(envelopes, simDate, reports, transactions);
+
+    if (checkResult.generatedActivities && checkResult.generatedActivities.length > 0) {
+      checkResult.generatedActivities.forEach(act => handleAddActivity(act));
+    }
 
     if (checkResult.newReport) {
       const simulatedReport: Report = {
@@ -237,9 +295,23 @@ export default function App() {
       setEnvelopes(prev =>
         prev.map(e => ((e.$id === id || e.id === id) ? { ...envelopeData, user_id: userId, $id: id, id } : e))
       );
+      handleAddActivity({
+        type: 'setting_change',
+        title: `Ubah Pengaturan: ${envelopeData.name}`,
+        envelope_name: envelopeData.name,
+        description: `Pengaturan amplop "${envelopeData.name}" diubah (Target: Rp ${envelopeData.target_monthly.toLocaleString('id-ID')}).`,
+        timestamp: new Date().toISOString()
+      });
     } else {
       const created = await createEnvelope(envelopeData, userId);
       setEnvelopes(prev => [...prev, created]);
+      handleAddActivity({
+        type: 'setting_change',
+        title: `Amplop Baru: ${envelopeData.name}`,
+        envelope_name: envelopeData.name,
+        description: `Amplop baru "${envelopeData.name}" berhasil dibuat dengan target bulanan Rp ${envelopeData.target_monthly.toLocaleString('id-ID')}.`,
+        timestamp: new Date().toISOString()
+      });
     }
   };
 
@@ -272,6 +344,21 @@ export default function App() {
     };
 
     await handleSaveEnvelope(updatedData, targetEnv.$id || targetEnv.id);
+
+    handleAddActivity({
+      type: 'top_up',
+      title: `Top Up: ${targetEnv.name}`,
+      envelope_name: targetEnv.name,
+      envelope_id: envelopeId,
+      amount: topUpAmount,
+      details: {
+        saldo_sebelum: targetEnv.active_balance || 0,
+        nominal_top_up: topUpAmount,
+        saldo_setelah: newActiveBalance
+      },
+      description: `Top up manual saldo amplop ${targetEnv.name} sebesar Rp ${topUpAmount.toLocaleString('id-ID')}. Saldo kini Rp ${newActiveBalance.toLocaleString('id-ID')}.`,
+      timestamp: new Date().toISOString()
+    });
   };
 
   // Transaction CRUD & Rollback
@@ -367,8 +454,12 @@ export default function App() {
   };
 
   const handleNavigateToTransaction = (envelopeId?: string) => {
-    if (envelopeId) setPreselectedEnvelopeId(envelopeId);
-    setActiveTab('transaksi');
+    if (envelopeId) {
+      setPreselectedEnvelopeId(envelopeId);
+    } else {
+      setPreselectedEnvelopeId('');
+    }
+    setIsTransactionModalOpen(true);
   };
 
   const totalOverallBalance = envelopes.reduce(
@@ -472,12 +563,10 @@ export default function App() {
                   />
                 )}
 
-                {activeTab === 'transaksi' && (
-                  <TransactionView
-                    envelopes={envelopes}
-                    preselectedEnvelopeId={preselectedEnvelopeId}
-                    onAddTransaction={handleAddTransaction}
-                    onNavigateToRiwayat={() => setActiveTab('riwayat')}
+                {activeTab === 'aktivitas' && (
+                  <AktivitasView
+                    activities={activities}
+                    onClearActivities={handleClearActivities}
                   />
                 )}
 
@@ -506,8 +595,25 @@ export default function App() {
         <BottomNav
           activeTab={activeTab}
           onSelectTab={tab => setActiveTab(tab)}
+          onOpenTransactionModal={() => {
+            setPreselectedEnvelopeId('');
+            setIsTransactionModalOpen(true);
+          }}
         />
       )}
+
+      {/* Transaction Popup Modal */}
+      <TransactionModal
+        isOpen={isTransactionModalOpen}
+        onClose={() => setIsTransactionModalOpen(false)}
+        envelopes={envelopes}
+        preselectedEnvelopeId={preselectedEnvelopeId}
+        onAddTransaction={handleAddTransaction}
+        onNavigateToRiwayat={() => {
+          setIsTransactionModalOpen(false);
+          setActiveTab('riwayat');
+        }}
+      />
 
       {/* Sidebar Drawer */}
       <SidebarDrawer

@@ -53,7 +53,23 @@ export interface Report {
   details: string; // JSON string payload
 }
 
-export type TabType = 'home' | 'transaksi' | 'riwayat' | 'laporan';
+export type ActivityType = 'top_up' | 'auto_debt' | 'setting_change' | 'system';
+
+export interface Activity {
+  $id?: string;
+  id?: string;
+  user_id?: string;
+  type: ActivityType;
+  title: string;
+  description: string;
+  envelope_name?: string;
+  envelope_id?: string;
+  amount?: number;
+  details?: Record<string, any>;
+  timestamp: string; // ISO8601 format
+}
+
+export type TabType = 'home' | 'aktivitas' | 'riwayat' | 'laporan';
 
 export type AppMode = 'amplop' | 'dailycam' | 'textpaste';
 

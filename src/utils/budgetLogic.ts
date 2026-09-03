@@ -1,4 +1,4 @@
-import { Envelope, Report, Transaction, ArchivedTransaction, ReportDetailsPayload } from '../types';
+import { Envelope, Report, Transaction, ArchivedTransaction, ReportDetailsPayload, Activity } from '../types';
 
 export interface SmartRecResult {
   phase: number;
@@ -165,6 +165,7 @@ export interface ScheduledCheckResult {
   updatedEnvelopes: Envelope[];
   newReport?: Omit<Report, '$id' | 'id'>;
   hasChanges: boolean;
+  generatedActivities?: Activity[];
 }
 
 export const runScheduledChecks = (
@@ -183,6 +184,7 @@ export const runScheduledChecks = (
 
   let hasChanges = false;
   let newReport: Omit<Report, '$id' | 'id'> | undefined = undefined;
+  const generatedActivities: Activity[] = [];
 
   // Month Names for Indonesia
   const monthNamesIndo = [
@@ -257,6 +259,21 @@ export const runScheduledChecks = (
       const newActive = Math.min(targetMonthly, weeklyAllowance);
       const newReserve = Math.max(0, targetMonthly - newActive);
 
+      generatedActivities.push({
+        type: 'auto_debt',
+        title: `Auto Top Up Bulanan: ${env.name}`,
+        envelope_name: env.name,
+        envelope_id: env.$id || env.id,
+        amount: targetMonthly,
+        details: {
+          target_bulanan: targetMonthly,
+          alokasi_mingguan: newActive,
+          masuk_cadangan: newReserve
+        },
+        description: `Pengisian penuh awal bulan untuk amplop ${env.name} sebesar Rp ${targetMonthly.toLocaleString('id-ID')}.`,
+        timestamp: today.toISOString()
+      });
+
       return {
         ...env,
         active_balance: newActive,
@@ -290,6 +307,25 @@ export const runScheduledChecks = (
 
       if (amountFromReserve > 0 || currentPhase > lastPhase || lastMonth !== currentMonthStr) {
         hasChanges = true;
+
+        if (amountFromReserve > 0) {
+          generatedActivities.push({
+            type: 'auto_debt',
+            title: `Auto Debt: ${env.name}`,
+            envelope_name: env.name,
+            envelope_id: env.$id || env.id,
+            amount: amountFromReserve,
+            details: {
+              sisa_minggu_sebelumnya: currentActive,
+              target_mingguan: targetWeekly,
+              tambalan_dari_cadangan: amountFromReserve,
+              sisa_cadangan: Math.max(0, (env.reserve_balance || 0) - amountFromReserve)
+            },
+            description: `Auto top up tambalan mingguan amplop ${env.name} sebesar Rp ${amountFromReserve.toLocaleString('id-ID')} dari dana cadangan (sisa saldo minggu sebelumnya: Rp ${currentActive.toLocaleString('id-ID')}).`,
+            timestamp: today.toISOString()
+          });
+        }
+
         return {
           ...env,
           reserve_balance: Math.max(0, (env.reserve_balance || 0) - amountFromReserve),
@@ -305,6 +341,7 @@ export const runScheduledChecks = (
   return {
     updatedEnvelopes,
     newReport,
-    hasChanges
+    hasChanges,
+    generatedActivities
   };
 };
