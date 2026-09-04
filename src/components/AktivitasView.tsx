@@ -166,7 +166,7 @@ export const AktivitasView: React.FC<AktivitasViewProps> = ({
                 </div>
 
                 {/* Detailed Breakdown Pill (Especially for Auto Debt tambalan dari sisa minggu lalu) */}
-                {act.details && Object.keys(act.details).length > 0 && (
+                {act.details && typeof act.details === 'object' && Object.keys(act.details).length > 0 && (
                   <div className="bg-slate-50/80 rounded-xl p-2.5 border border-slate-100 text-[11px] text-slate-600 grid grid-cols-2 gap-2">
                     {act.details.tambalan_dari_cadangan !== undefined && (
                       <div>

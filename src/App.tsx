@@ -91,107 +91,125 @@ export default function App() {
   // 1. Check Google Auth Session on startup
   const checkAuth = useCallback(async () => {
     setIsLoadingAuth(true);
-    const user = await getCurrentUser();
-    if (user) {
-      setCurrentUser(user);
-      setIsAuthenticated(true);
-      await loadDatabaseData(user.$id);
-    } else {
+    try {
+      const user = await getCurrentUser();
+      if (user) {
+        setCurrentUser(user);
+        setIsAuthenticated(true);
+        await loadDatabaseData(user.$id);
+      } else {
+        setCurrentUser(null);
+        setIsAuthenticated(false);
+      }
+    } catch (err) {
+      console.error('checkAuth session error:', err);
       setCurrentUser(null);
       setIsAuthenticated(false);
+    } finally {
+      setIsLoadingAuth(false);
     }
-    setIsLoadingAuth(false);
   }, []);
 
   // 2. Load Appwrite Database collections strictly scoped to user ID
   const loadDatabaseData = async (userId: string) => {
     setIsLoadingData(true);
+    try {
+      const savedAutoDebtSetting = localStorage.getItem(`mb_setting_auto_debt_${userId}`);
+      const autoDebtEnabled = savedAutoDebtSetting !== null ? savedAutoDebtSetting === 'true' : true;
+      setIsMonthlyAutoDebtEnabled(autoDebtEnabled);
 
-    const savedAutoDebtSetting = localStorage.getItem(`mb_setting_auto_debt_${userId}`);
-    const autoDebtEnabled = savedAutoDebtSetting !== null ? savedAutoDebtSetting === 'true' : true;
-    setIsMonthlyAutoDebtEnabled(autoDebtEnabled);
+      let [loadedEnv, loadedTx, loadedRep, loadedCam, loadedPaste, loadedActs] = await Promise.all([
+        getEnvelopes(userId),
+        getTransactions(userId),
+        getReports(userId),
+        getDailyCamEntries(userId),
+        getTextPasteItems(userId),
+        getActivities(userId)
+      ]);
 
-    let [loadedEnv, loadedTx, loadedRep, loadedCam, loadedPaste, loadedActs] = await Promise.all([
-      getEnvelopes(userId),
-      getTransactions(userId),
-      getReports(userId),
-      getDailyCamEntries(userId),
-      getTextPasteItems(userId),
-      getActivities(userId)
-    ]);
+      loadedEnv = Array.isArray(loadedEnv) ? loadedEnv : [];
+      loadedTx = Array.isArray(loadedTx) ? loadedTx : [];
+      loadedRep = Array.isArray(loadedRep) ? loadedRep : [];
+      loadedCam = Array.isArray(loadedCam) ? loadedCam : [];
+      loadedPaste = Array.isArray(loadedPaste) ? loadedPaste : [];
+      loadedActs = Array.isArray(loadedActs) ? loadedActs : [];
 
-    // Backward compatibility: If current device had local activities, migrate them to cloud DB
-    const savedLocalActs = localStorage.getItem(`mybox_activities_${userId}`);
-    if (savedLocalActs) {
-      try {
-        const parsed: Activity[] = JSON.parse(savedLocalActs);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const cloudSignatures = new Set(loadedActs.map(a => `${a.timestamp}_${a.title}`));
-          for (const localAct of parsed) {
-            const sig = `${localAct.timestamp}_${localAct.title}`;
-            if (!cloudSignatures.has(sig)) {
-              createActivity(localAct, userId).catch(() => {});
-              loadedActs.push(localAct);
-              cloudSignatures.add(sig);
+      // Backward compatibility: If current device had local activities, migrate them to cloud DB
+      const savedLocalActs = localStorage.getItem(`mybox_activities_${userId}`);
+      if (savedLocalActs) {
+        try {
+          const parsed: Activity[] = JSON.parse(savedLocalActs);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const cloudSignatures = new Set(loadedActs.map(a => `${a.timestamp}_${a.title}`));
+            for (const localAct of parsed) {
+              const sig = `${localAct.timestamp}_${localAct.title}`;
+              if (!cloudSignatures.has(sig)) {
+                createActivity(localAct, userId).catch(() => {});
+                loadedActs.push(localAct);
+                cloudSignatures.add(sig);
+              }
             }
           }
-        }
-      } catch (e) {}
-    }
-
-    // Auto-sync current device push subscriber to Appwrite database if permission is granted
-    if (getNotificationPermissionStatus() === 'granted') {
-      const isPushEnabled = localStorage.getItem(`mb_push_enabled_${userId}`) !== 'false';
-      if (isPushEnabled) {
-        subscribeToNotifications(userId).catch(e => console.warn('Push auto-sync background error:', e));
+        } catch (e) {}
       }
-    }
 
-    let finalEnvelopes = loadedEnv;
-    let finalReports = loadedRep;
-    let finalTransactions = loadedTx;
-
-    if (autoDebtEnabled) {
-      const today = new Date();
-      const checkResult = runScheduledChecks(loadedEnv, today, loadedRep, loadedTx);
-
-      if (checkResult.hasChanges) {
-        finalEnvelopes = checkResult.updatedEnvelopes;
-        for (const env of finalEnvelopes) {
-          if (env.$id || env.id) {
-            await updateEnvelope(env.$id || env.id || '', env, userId);
-          }
+      // Auto-sync current device push subscriber to Appwrite database if permission is granted
+      if (getNotificationPermissionStatus() === 'granted') {
+        const isPushEnabled = localStorage.getItem(`mb_push_enabled_${userId}`) !== 'false';
+        if (isPushEnabled) {
+          subscribeToNotifications(userId).catch(e => console.warn('Push auto-sync background error:', e));
         }
+      }
 
-        if (checkResult.generatedActivities && checkResult.generatedActivities.length > 0) {
-          for (const genAct of checkResult.generatedActivities) {
-            createActivity(genAct, userId).catch(() => {});
-          }
-          loadedActs = [...checkResult.generatedActivities, ...loadedActs];
-        }
+      let finalEnvelopes = loadedEnv;
+      let finalReports = loadedRep;
+      let finalTransactions = loadedTx;
 
-        if (checkResult.newReport) {
-          const createdRep = await createReport(checkResult.newReport, userId);
-          finalReports = [createdRep, ...finalReports];
+      if (autoDebtEnabled) {
+        const today = new Date();
+        const checkResult = runScheduledChecks(loadedEnv, today, loadedRep, loadedTx);
 
-          // Clear previous month active transactions after archiving to report
-          for (const tx of loadedTx) {
-            if (tx.$id || tx.id) {
-              await deleteTransaction(tx.$id || tx.id || '', userId);
+        if (checkResult.hasChanges) {
+          finalEnvelopes = checkResult.updatedEnvelopes;
+          for (const env of finalEnvelopes) {
+            if (env.$id || env.id) {
+              await updateEnvelope(env.$id || env.id || '', env, userId);
             }
           }
-          finalTransactions = [];
+
+          if (checkResult.generatedActivities && checkResult.generatedActivities.length > 0) {
+            for (const genAct of checkResult.generatedActivities) {
+              createActivity(genAct, userId).catch(() => {});
+            }
+            loadedActs = [...checkResult.generatedActivities, ...loadedActs];
+          }
+
+          if (checkResult.newReport) {
+            const createdRep = await createReport(checkResult.newReport, userId);
+            finalReports = [createdRep, ...finalReports];
+
+            // Clear previous month active transactions after archiving to report
+            for (const tx of loadedTx) {
+              if (tx.$id || tx.id) {
+                await deleteTransaction(tx.$id || tx.id || '', userId);
+              }
+            }
+            finalTransactions = [];
+          }
         }
       }
-    }
 
-    setEnvelopes(finalEnvelopes);
-    setTransactions(finalTransactions);
-    setReports(finalReports);
-    setActivities(loadedActs);
-    setDailyCamEntries(loadedCam);
-    setTextPasteItems(loadedPaste);
-    setIsLoadingData(false);
+      setEnvelopes(finalEnvelopes);
+      setTransactions(finalTransactions);
+      setReports(finalReports);
+      setActivities(loadedActs);
+      setDailyCamEntries(loadedCam);
+      setTextPasteItems(loadedPaste);
+    } catch (err) {
+      console.error('loadDatabaseData error:', err);
+    } finally {
+      setIsLoadingData(false);
+    }
   };
 
   useEffect(() => {

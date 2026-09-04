@@ -228,7 +228,7 @@ export const updateEnvelope = async (id: string, data: Partial<Envelope>, userId
   const allowedKeys = [
     'name', 'icon', 'color', 'type',
     'target_monthly', 'weekly_allowance', 'reserve_balance', 'active_balance',
-    'is_smart_rec', 'is_auto_debt', 'last_reset_phase', 'last_reset_month', 'user_id'
+    'is_smart_rec', 'is_auto_debt', 'last_reset_phase', 'last_reset_month'
   ];
 
   for (const key of allowedKeys) {
@@ -246,10 +246,11 @@ export const updateEnvelope = async (id: string, data: Partial<Envelope>, userId
       try {
         await databases.updateDocument(DATABASE_ID, COL_ENVELOPES, id, cleanData);
       } catch (attrErr) {
-        delete cleanData.user_id;
-        delete cleanData.last_reset_phase;
-        delete cleanData.last_reset_month;
-        await databases.updateDocument(DATABASE_ID, COL_ENVELOPES, id, cleanData);
+        // Fallback: If newer attributes (last_reset_phase/month) don't exist yet on collection schema
+        const fallbackPayload = { ...cleanData };
+        delete fallbackPayload.last_reset_phase;
+        delete fallbackPayload.last_reset_month;
+        await databases.updateDocument(DATABASE_ID, COL_ENVELOPES, id, fallbackPayload);
       }
     } catch (err) {
       console.error('Appwrite updateEnvelope Error:', err);

@@ -15,6 +15,7 @@ interface DashboardViewProps {
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   envelopes,
+  transactions = [],
   onOpenEnvelopeModal,
   onNavigateToTransaction,
   onTopUpEnvelope
@@ -43,9 +44,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Calculate today's spending per envelope
   const todaySpentMap = useMemo(() => {
     const map: Record<string, number> = {};
-    if (!transactions) return map;
+    if (!transactions || !Array.isArray(transactions)) return map;
     for (const tx of transactions) {
-      if (tx.timestamp && tx.timestamp.startsWith(todayDateStr)) {
+      if (tx && typeof tx.timestamp === 'string' && tx.timestamp.startsWith(todayDateStr)) {
         map[tx.envelope_id] = (map[tx.envelope_id] || 0) + Number(tx.amount || 0);
       }
     }
