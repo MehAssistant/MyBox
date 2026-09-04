@@ -286,54 +286,68 @@ export const runScheduledChecks = (
     hasChanges = true;
   }
 
-  // 2. Auto Debt & Carryover (Reset Logic for 1st, 8th, 15th, 22nd)
+  // 2. Auto Debt & Carryover (Reset Logic strictly for weekly phases: 1st, 8th, 15th, 22nd)
   updatedEnvelopes = updatedEnvelopes.map(env => {
     if (!env.is_auto_debt) return env;
 
     const lastPhase = env.last_reset_phase || 0;
     const lastMonth = env.last_reset_month || '';
 
+    // If envelope has no recorded reset month yet:
+    // If today is NOT a reset day, don't trigger auto-debt, simply stamp to current month & phase
+    if (!lastMonth) {
+      if (!isResetDay) {
+        hasChanges = true;
+        return {
+          ...env,
+          last_reset_phase: currentPhase,
+          last_reset_month: currentMonthStr
+        };
+      }
+    }
+
+    // If already reset for current phase in current month, DO NOT touch funds
     const isAlreadyResetForPhase = lastMonth === currentMonthStr && lastPhase >= currentPhase;
     if (isAlreadyResetForPhase) {
       return env;
     }
 
-    if (isResetDay || currentPhase > lastPhase || lastMonth !== currentMonthStr) {
+    // Auto-debt should only trigger if it is a reset day (1, 8, 15, 22) OR phase has advanced to a new week
+    const isNewWeekOrMonth = lastMonth !== currentMonthStr || currentPhase > lastPhase;
+    if (isResetDay || isNewWeekOrMonth) {
       const targetWeekly = env.type === 'monthly_split' ? env.weekly_allowance : env.target_monthly;
       const currentActive = env.active_balance || 0;
 
       const neededTopUp = Math.max(0, targetWeekly - currentActive);
       const amountFromReserve = Math.min(env.reserve_balance || 0, neededTopUp);
 
-      if (amountFromReserve > 0 || currentPhase > lastPhase || lastMonth !== currentMonthStr) {
-        hasChanges = true;
+      hasChanges = true;
 
-        if (amountFromReserve > 0) {
-          generatedActivities.push({
-            type: 'auto_debt',
-            title: `Auto Debt: ${env.name}`,
-            envelope_name: env.name,
-            envelope_id: env.$id || env.id,
-            amount: amountFromReserve,
-            details: {
-              sisa_minggu_sebelumnya: currentActive,
-              target_mingguan: targetWeekly,
-              tambalan_dari_cadangan: amountFromReserve,
-              sisa_cadangan: Math.max(0, (env.reserve_balance || 0) - amountFromReserve)
-            },
-            description: `Auto top up tambalan mingguan amplop ${env.name} sebesar Rp ${amountFromReserve.toLocaleString('id-ID')} dari dana cadangan (sisa saldo minggu sebelumnya: Rp ${currentActive.toLocaleString('id-ID')}).`,
-            timestamp: today.toISOString()
-          });
-        }
-
-        return {
-          ...env,
-          reserve_balance: Math.max(0, (env.reserve_balance || 0) - amountFromReserve),
-          active_balance: currentActive + amountFromReserve,
-          last_reset_phase: currentPhase,
-          last_reset_month: currentMonthStr
-        };
+      if (amountFromReserve > 0) {
+        generatedActivities.push({
+          type: 'auto_debt',
+          title: `Auto Debt: ${env.name}`,
+          envelope_name: env.name,
+          envelope_id: env.$id || env.id,
+          amount: amountFromReserve,
+          details: {
+            sisa_minggu_sebelumnya: currentActive,
+            target_mingguan: targetWeekly,
+            tambalan_dari_cadangan: amountFromReserve,
+            sisa_cadangan: Math.max(0, (env.reserve_balance || 0) - amountFromReserve)
+          },
+          description: `Auto top up tambalan mingguan amplop ${env.name} sebesar Rp ${amountFromReserve.toLocaleString('id-ID')} dari dana cadangan (sisa saldo minggu sebelumnya: Rp ${currentActive.toLocaleString('id-ID')}).`,
+          timestamp: today.toISOString()
+        });
       }
+
+      return {
+        ...env,
+        reserve_balance: Math.max(0, (env.reserve_balance || 0) - amountFromReserve),
+        active_balance: currentActive + amountFromReserve,
+        last_reset_phase: currentPhase,
+        last_reset_month: currentMonthStr
+      };
     }
     return env;
   });

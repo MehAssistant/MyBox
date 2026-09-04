@@ -20,7 +20,10 @@ import {
   getTextPasteItems,
   createTextPasteItem,
   updateTextPasteItem,
-  deleteTextPasteItem
+  deleteTextPasteItem,
+  getActivities,
+  createActivity,
+  clearAllActivities
 } from './services/appwrite';
 import { runScheduledChecks } from './utils/budgetLogic';
 import { getNotificationPermissionStatus, subscribeToNotifications } from './utils/notificationHelper';
@@ -70,28 +73,19 @@ export default function App() {
   const [selectedEnvelopeForModal, setSelectedEnvelopeForModal] = useState<Envelope | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
 
-  // Activity Handlers
-  const handleAddActivity = (act: Omit<Activity, '$id' | 'id'>) => {
-    const newActivity: Activity = {
-      ...act,
-      $id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      user_id: currentUser?.$id
-    };
-    setActivities(prev => {
-      const updated = [newActivity, ...prev];
-      if (currentUser?.$id) {
-        localStorage.setItem(`mybox_activities_${currentUser.$id}`, JSON.stringify(updated.slice(0, 100)));
-      }
-      return updated;
-    });
+  // Activity Handlers (Synced across devices via Appwrite DB & Account Prefs)
+  const handleAddActivity = async (act: Omit<Activity, '$id' | 'id'>) => {
+    try {
+      const created = await createActivity(act, currentUser?.$id);
+      setActivities(prev => [created, ...prev]);
+    } catch (e) {
+      console.warn('handleAddActivity error:', e);
+    }
   };
 
-  const handleClearActivities = () => {
+  const handleClearActivities = async () => {
     setActivities([]);
-    if (currentUser?.$id) {
-      localStorage.removeItem(`mybox_activities_${currentUser.$id}`);
-    }
+    await clearAllActivities(currentUser?.$id);
   };
 
   // 1. Check Google Auth Session on startup
@@ -117,20 +111,31 @@ export default function App() {
     const autoDebtEnabled = savedAutoDebtSetting !== null ? savedAutoDebtSetting === 'true' : true;
     setIsMonthlyAutoDebtEnabled(autoDebtEnabled);
 
-    let [loadedEnv, loadedTx, loadedRep, loadedCam, loadedPaste] = await Promise.all([
+    let [loadedEnv, loadedTx, loadedRep, loadedCam, loadedPaste, loadedActs] = await Promise.all([
       getEnvelopes(userId),
       getTransactions(userId),
       getReports(userId),
       getDailyCamEntries(userId),
-      getTextPasteItems(userId)
+      getTextPasteItems(userId),
+      getActivities(userId)
     ]);
 
-    // Load saved activities from localStorage
-    const savedActs = localStorage.getItem(`mybox_activities_${userId}`);
-    let loadedActs: Activity[] = [];
-    if (savedActs) {
+    // Backward compatibility: If current device had local activities, migrate them to cloud DB
+    const savedLocalActs = localStorage.getItem(`mybox_activities_${userId}`);
+    if (savedLocalActs) {
       try {
-        loadedActs = JSON.parse(savedActs);
+        const parsed: Activity[] = JSON.parse(savedLocalActs);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const cloudSignatures = new Set(loadedActs.map(a => `${a.timestamp}_${a.title}`));
+          for (const localAct of parsed) {
+            const sig = `${localAct.timestamp}_${localAct.title}`;
+            if (!cloudSignatures.has(sig)) {
+              createActivity(localAct, userId).catch(() => {});
+              loadedActs.push(localAct);
+              cloudSignatures.add(sig);
+            }
+          }
+        }
       } catch (e) {}
     }
 
@@ -159,8 +164,10 @@ export default function App() {
         }
 
         if (checkResult.generatedActivities && checkResult.generatedActivities.length > 0) {
+          for (const genAct of checkResult.generatedActivities) {
+            createActivity(genAct, userId).catch(() => {});
+          }
           loadedActs = [...checkResult.generatedActivities, ...loadedActs];
-          localStorage.setItem(`mybox_activities_${userId}`, JSON.stringify(loadedActs.slice(0, 100)));
         }
 
         if (checkResult.newReport) {
@@ -557,6 +564,7 @@ export default function App() {
                 {activeTab === 'home' && (
                   <DashboardView
                     envelopes={envelopes}
+                    transactions={transactions}
                     onOpenEnvelopeModal={handleOpenEnvelopeModal}
                     onNavigateToTransaction={handleNavigateToTransaction}
                     onTopUpEnvelope={handleTopUpEnvelope}

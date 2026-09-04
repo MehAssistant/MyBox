@@ -1,5 +1,5 @@
 import { Client, Account, Databases, Storage, ID, Query, Permission, Role, Models } from 'appwrite';
-import { Envelope, Transaction, Report, DailyCamEntry, TextPasteItem } from '../types';
+import { Envelope, Transaction, Report, DailyCamEntry, TextPasteItem, Activity } from '../types';
 
 const APPWRITE_ENDPOINT = 'https://sgp.cloud.appwrite.io/v1';
 const APPWRITE_PROJECT = 'mybox';
@@ -20,6 +20,7 @@ export const COL_REPORTS = 'col_reports';
 export const COL_PUSH_SUBSCRIBERS = 'col_push_subscribers';
 export const COL_DAILYCAM = 'col_dailycam';
 export const COL_TEXTPASTE = 'col_textpaste';
+export const COL_ACTIVITIES = 'col_activities';
 export const BUCKET_DAILYCAM = '6a98130500111e865d17';
 
 // Get active logged-in user or null if not authenticated
@@ -140,7 +141,7 @@ export const getEnvelopes = async (userId?: string): Promise<Envelope[]> => {
       active_balance: Number(doc.active_balance),
       is_smart_rec: Boolean(doc.is_smart_rec),
       is_auto_debt: Boolean(doc.is_auto_debt),
-      last_reset_phase: doc.last_reset_phase ? Number(doc.last_reset_phase) : 1,
+      last_reset_phase: doc.last_reset_phase !== undefined && doc.last_reset_phase !== null ? Number(doc.last_reset_phase) : 1,
       last_reset_month: doc.last_reset_month || '',
       $permissions: doc.$permissions
     }));
@@ -180,8 +181,8 @@ export const createEnvelope = async (data: Omit<Envelope, '$id' | 'id'>, userId?
   const fullPayload = {
     ...basePayload,
     ...(userId ? { user_id: userId } : {}),
-    ...(data.last_reset_phase ? { last_reset_phase: Number(data.last_reset_phase) } : {}),
-    ...(data.last_reset_month ? { last_reset_month: data.last_reset_month } : {})
+    last_reset_phase: data.last_reset_phase !== undefined ? Number(data.last_reset_phase) : 1,
+    last_reset_month: data.last_reset_month || ''
   };
 
   const permissions = getUserPermissions(userId);
@@ -1018,5 +1019,163 @@ export const deleteTextPasteItem = async (id: string, userId?: string): Promise<
     }
   }
 };
+
+// ==========================================
+// Activities Sync Handlers (Multi-Device Appwrite DB + Account Prefs Fallback)
+// ==========================================
+export const getActivities = async (userId?: string): Promise<Activity[]> => {
+  const cacheKey = userId ? `mb_activities_${userId}` : 'mb_activities';
+  const localData = getLocalCache(cacheKey);
+
+  try {
+    const queries = [
+      Query.orderDesc('timestamp'),
+      Query.limit(100)
+    ];
+    if (userId) {
+      queries.push(Query.equal('user_id', userId));
+    }
+
+    const res = await databases.listDocuments(DATABASE_ID, COL_ACTIVITIES, queries);
+    const serverActivities: Activity[] = res.documents.map(doc => {
+      let parsedDetails = undefined;
+      if (doc.details) {
+        try {
+          parsedDetails = typeof doc.details === 'string' ? JSON.parse(doc.details) : doc.details;
+        } catch (e) {
+          parsedDetails = undefined;
+        }
+      }
+
+      return {
+        $id: doc.$id,
+        id: doc.$id,
+        user_id: doc.user_id,
+        type: doc.type,
+        title: doc.title,
+        description: doc.description,
+        envelope_name: doc.envelope_name || undefined,
+        envelope_id: doc.envelope_id || undefined,
+        amount: doc.amount !== undefined ? Number(doc.amount) : undefined,
+        details: parsedDetails,
+        timestamp: doc.timestamp || doc.$createdAt
+      };
+    });
+
+    // Also update local cache
+    saveLocalCache(cacheKey, serverActivities);
+    return serverActivities;
+  } catch (err) {
+    console.warn('Appwrite getActivities DB notice, checking account prefs fallback:', err);
+    try {
+      const prefs = await account.getPrefs();
+      if (Array.isArray(prefs?.activities) && prefs.activities.length > 0) {
+        saveLocalCache(cacheKey, prefs.activities);
+        return prefs.activities;
+      }
+    } catch (prefErr) {}
+
+    return localData || [];
+  }
+};
+
+export const createActivity = async (
+  activityData: Omit<Activity, '$id' | 'id'>,
+  userId?: string
+): Promise<Activity> => {
+  const cacheKey = userId ? `mb_activities_${userId}` : 'mb_activities';
+  const permissions = getUserPermissions(userId);
+
+  const payload: Record<string, any> = {
+    user_id: userId || '',
+    type: activityData.type,
+    title: activityData.title,
+    description: activityData.description || '',
+    envelope_name: activityData.envelope_name || '',
+    envelope_id: activityData.envelope_id || '',
+    amount: activityData.amount !== undefined ? Number(activityData.amount) : 0,
+    details: activityData.details ? JSON.stringify(activityData.details) : '',
+    timestamp: activityData.timestamp || new Date().toISOString()
+  };
+
+  try {
+    const doc = await databases.createDocument(
+      DATABASE_ID,
+      COL_ACTIVITIES,
+      ID.unique(),
+      payload,
+      permissions
+    );
+
+    const created: Activity = {
+      ...activityData,
+      $id: doc.$id,
+      id: doc.$id,
+      user_id: userId
+    };
+
+    const current = getLocalCache(cacheKey);
+    const updated = [created, ...current].slice(0, 100);
+    saveLocalCache(cacheKey, updated);
+
+    // Backup to account preferences so it's always accessible on all devices
+    account.getPrefs().then(prefs => {
+      account.updatePrefs({
+        ...prefs,
+        activities: updated.slice(0, 30)
+      }).catch(() => {});
+    }).catch(() => {});
+
+    return created;
+  } catch (err) {
+    console.error('Appwrite createActivity error, saving to local & prefs:', err);
+    const localActivity: Activity = {
+      ...activityData,
+      $id: `act-${Date.now()}`,
+      id: `act-${Date.now()}`,
+      user_id: userId
+    };
+    const current = getLocalCache(cacheKey);
+    const updated = [localActivity, ...current].slice(0, 100);
+    saveLocalCache(cacheKey, updated);
+
+    account.getPrefs().then(prefs => {
+      account.updatePrefs({
+        ...prefs,
+        activities: updated.slice(0, 30)
+      }).catch(() => {});
+    }).catch(() => {});
+
+    return localActivity;
+  }
+};
+
+export const clearAllActivities = async (userId?: string): Promise<void> => {
+  const cacheKey = userId ? `mb_activities_${userId}` : 'mb_activities';
+  saveLocalCache(cacheKey, []);
+
+  try {
+    const prefs = await account.getPrefs();
+    await account.updatePrefs({
+      ...prefs,
+      activities: []
+    });
+  } catch (e) {}
+
+  if (userId) {
+    try {
+      const res = await databases.listDocuments(DATABASE_ID, COL_ACTIVITIES, [
+        Query.equal('user_id', userId),
+        Query.limit(100)
+      ]);
+      for (const doc of res.documents) {
+        await databases.deleteDocument(DATABASE_ID, COL_ACTIVITIES, doc.$id);
+      }
+    } catch (e) {
+      console.warn('clearAllActivities DB delete notice:', e);
+    }
+  }
+};
+
 
 

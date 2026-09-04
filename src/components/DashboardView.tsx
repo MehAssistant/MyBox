@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
-import { Envelope } from '../types';
-import { formatCurrency } from '../utils/dateHelper';
+import React, { useState, useMemo } from 'react';
+import { Envelope, Transaction } from '../types';
+import { formatCurrency, getTodayDateString } from '../utils/dateHelper';
 import { getSmartRecommendation } from '../utils/budgetLogic';
 import { IconHelper } from './IconHelper';
 import { Wallet, Sparkles, Plus, RefreshCw, Settings, ArrowUpCircle, CheckCircle2, X } from 'lucide-react';
 
 interface DashboardViewProps {
   envelopes: Envelope[];
+  transactions?: Transaction[];
   onOpenEnvelopeModal: (envelope?: Envelope) => void;
   onNavigateToTransaction: (envelopeId?: string) => void;
   onTopUpEnvelope?: (envelopeId: string) => Promise<void>;
@@ -37,6 +38,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const today = new Date();
   const currentDate = today.getDate();
+  const todayDateStr = getTodayDateString();
+
+  // Calculate today's spending per envelope
+  const todaySpentMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    if (!transactions) return map;
+    for (const tx of transactions) {
+      if (tx.timestamp && tx.timestamp.startsWith(todayDateStr)) {
+        map[tx.envelope_id] = (map[tx.envelope_id] || 0) + Number(tx.amount || 0);
+      }
+    }
+    return map;
+  }, [transactions, todayDateStr]);
 
   // Handle Top Up Execution
   const handleProcessTopUp = async () => {
@@ -136,6 +150,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       ) : (
         <div className="grid grid-cols-1 gap-3">
           {envelopes.map(env => {
+            const envId = env.$id || env.id || '';
+            const todaySpent = todaySpentMap[envId] || 0;
             const smartRec = getSmartRecommendation(env.active_balance || 0, today);
             const dailyFormatted = formatCurrency(smartRec.dailyLimit);
 
@@ -178,6 +194,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       {formatCurrency(env.active_balance)}
                     </div>
                     <div className="text-[11px] text-slate-500">Saldo Aktif</div>
+                  </div>
+                </div>
+
+                {/* Info Bar: Pengeluaran Hari Ini & Dana Cadangan */}
+                <div className="bg-slate-50/90 border border-slate-100 rounded-xl px-2.5 py-1.5 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-slate-400 font-medium">Pengeluaran hari ini:</span>
+                    <span className={`text-xs font-bold ${todaySpent > 0 ? 'text-rose-600' : 'text-slate-600'}`}>
+                      {todaySpent > 0 ? `-${formatCurrency(todaySpent)}` : 'Rp 0'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 text-[11px]">
+                    <span className="text-slate-400 font-medium">Cadangan:</span>
+                    <span className="font-bold text-slate-700">
+                      {formatCurrency(env.reserve_balance || 0)}
+                    </span>
                   </div>
                 </div>
 

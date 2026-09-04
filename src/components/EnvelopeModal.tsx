@@ -95,8 +95,10 @@ export const EnvelopeModal: React.FC<EnvelopeModalProps> = ({
         reserve_balance: Number(reserveBalance),
         is_smart_rec: isSmartRec,
         is_auto_debt: isAutoDebt,
-        last_reset_phase: envelope?.last_reset_phase || 1,
-        last_reset_month: envelope?.last_reset_month || ''
+        last_reset_phase: envelope?.last_reset_phase !== undefined 
+          ? envelope.last_reset_phase 
+          : (new Date().getDate() >= 22 ? 4 : new Date().getDate() >= 15 ? 3 : new Date().getDate() >= 8 ? 2 : 1),
+        last_reset_month: envelope?.last_reset_month || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
       };
 
       await onSave(envelopeData, envelope?.$id || envelope?.id);
