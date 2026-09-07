@@ -14,3 +14,21 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Prevent hold / text selection globally for native app experience */
+html, body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Re-enable text selection for inputs, textareas, and selectable content */
+input, textarea, [contenteditable="true"], .select-text {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
