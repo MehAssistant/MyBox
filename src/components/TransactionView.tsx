@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Envelope } from '../types';
-import { formatCurrency } from '../utils/dateHelper';
+import { formatCurrency, getLocalDateTimeString } from '../utils/dateHelper';
 import { PlusCircle, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface TransactionViewProps {
@@ -21,10 +21,7 @@ export const TransactionView: React.FC<TransactionViewProps> = ({
   );
   const [amount, setAmount] = useState<string>('');
   const [note, setNote] = useState<string>('');
-  const [dateStr, setDateStr] = useState<string>(() => {
-    const now = new Date();
-    return now.toISOString().slice(0, 16);
-  });
+  const [dateStr, setDateStr] = useState<string>(() => getLocalDateTimeString());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -52,6 +49,7 @@ export const TransactionView: React.FC<TransactionViewProps> = ({
       setSuccessMsg(`Transaksi Rp ${numAmount.toLocaleString('id-ID')} berhasil dicatat!`);
       setAmount('');
       setNote('');
+      setDateStr(getLocalDateTimeString());
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err: any) {
       setErrorMsg(err?.message || 'Gagal menyimpan transaksi.');

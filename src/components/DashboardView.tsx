@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Envelope, Transaction } from '../types';
-import { formatCurrency, getTodayDateString } from '../utils/dateHelper';
+import { formatCurrency, isToday } from '../utils/dateHelper';
 import { getSmartRecommendation } from '../utils/budgetLogic';
 import { IconHelper } from './IconHelper';
 import { Wallet, Sparkles, Plus, RefreshCw, Settings, ArrowUpCircle, CheckCircle2, X } from 'lucide-react';
@@ -39,19 +39,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const today = new Date();
   const currentDate = today.getDate();
-  const todayDateStr = getTodayDateString();
 
   // Calculate today's spending per envelope
   const todaySpentMap = useMemo(() => {
     const map: Record<string, number> = {};
     if (!transactions || !Array.isArray(transactions)) return map;
     for (const tx of transactions) {
-      if (tx && typeof tx.timestamp === 'string' && tx.timestamp.startsWith(todayDateStr)) {
+      if (tx && tx.timestamp && isToday(tx.timestamp)) {
         map[tx.envelope_id] = (map[tx.envelope_id] || 0) + Number(tx.amount || 0);
       }
     }
     return map;
-  }, [transactions, todayDateStr]);
+  }, [transactions]);
 
   // Handle Top Up Execution
   const handleProcessTopUp = async () => {

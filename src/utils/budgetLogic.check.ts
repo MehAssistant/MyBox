@@ -59,4 +59,22 @@ console.assert(eomRes.newReport?.month_year === 'Agustus 2026', `Report for Sept
 const emptyRes = runScheduledChecks([], sept1);
 console.assert(emptyRes.newReport === undefined, 'Should NOT generate a report if envelopes list is empty');
 
+// 6. isToday and getLocalDateTimeString dateHelper test
+import { isToday, getLocalDateTimeString } from './dateHelper';
+const todayLocalNow = new Date();
+const todayIso = todayLocalNow.toISOString();
+console.assert(isToday(todayIso) === true, 'Current time ISO string should be recognized as today');
+
+// Test timestamp created at 02:00 AM local time (which might be previous day in UTC)
+const earlyMorning = new Date(todayLocalNow.getFullYear(), todayLocalNow.getMonth(), todayLocalNow.getDate(), 2, 0, 0);
+console.assert(isToday(earlyMorning.toISOString()) === true, 'Early morning transaction ISO string should be recognized as today');
+
+// Test yesterday timestamp
+const yesterday = new Date(todayLocalNow.getTime() - 25 * 60 * 60 * 1000);
+console.assert(isToday(yesterday.toISOString()) === false, 'Yesterday ISO string should NOT be recognized as today');
+
+// Test getLocalDateTimeString format YYYY-MM-DDTHH:mm
+const localDtStr = getLocalDateTimeString(todayLocalNow);
+console.assert(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(localDtStr), 'getLocalDateTimeString should format as YYYY-MM-DDTHH:mm');
+
 console.log('All budgetLogic checks passed successfully!');

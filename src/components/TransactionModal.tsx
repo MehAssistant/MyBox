@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Envelope } from '../types';
-import { formatCurrency } from '../utils/dateHelper';
+import { formatCurrency, getLocalDateTimeString } from '../utils/dateHelper';
 import { PlusCircle, AlertCircle, CheckCircle2, X } from 'lucide-react';
 
 interface TransactionModalProps {
@@ -25,21 +25,23 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   );
   const [amount, setAmount] = useState<string>('');
   const [note, setNote] = useState<string>('');
-  const [dateStr, setDateStr] = useState<string>(() => {
-    const now = new Date();
-    return now.toISOString().slice(0, 16);
-  });
+  const [dateStr, setDateStr] = useState<string>(() => getLocalDateTimeString());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
+    if (isOpen) {
+      setDateStr(getLocalDateTimeString());
+      setErrorMsg('');
+      setSuccessMsg('');
+    }
     if (preselectedEnvelopeId) {
       setSelectedEnvelopeId(preselectedEnvelopeId);
     } else if (envelopes.length > 0 && !selectedEnvelopeId) {
       setSelectedEnvelopeId(envelopes[0].$id || envelopes[0].id || '');
     }
-  }, [preselectedEnvelopeId, envelopes]);
+  }, [isOpen, preselectedEnvelopeId, envelopes]);
 
   if (!isOpen) return null;
 
